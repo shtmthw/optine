@@ -1,2 +1,2 @@
 # optine
-an agent of various functionality
+an agent of various functionality :)
