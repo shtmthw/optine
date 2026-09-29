@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,9 @@ type VLLMModelsResponse struct {
 }
 
 type VLLMErrorResponse struct {
-	Message string `json:"message"`
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 var vllmClient = &http.Client{
@@ -123,19 +126,28 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 
 	switch resp.StatusCode {
 	case 400:
-		var vllmErr VLLMErrorResponse
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return false, fmt.Errorf("could not read vLLM error response: %w", err)
+		}
 
-		if err := json.NewDecoder(resp.Body).Decode(&vllmErr); err != nil {
+		log.Printf("vLLM 400 body: %s", raw)
+
+		var vllmErr VLLMErrorResponse
+		if err := json.Unmarshal(raw, &vllmErr); err != nil {
 			return false, fmt.Errorf("could not decode vLLM error response: %w", err)
 		}
 
-		if strings.Contains(vllmErr.Message, "--enable-auto-tool-choice") {
+		log.Printf("vLLM error message: %q", vllmErr.Error.Message)
+
+		if strings.Contains(vllmErr.Error.Message, "requires --enable-auto-tool-choice") &&
+			strings.Contains(vllmErr.Error.Message, "--tool-call-parser") {
 			// specifically means auto tool calling isn't configured
 			return false, nil
 		}
 
 		// A different 400 is NOT evidence that tools are disabled.
-		return false, fmt.Errorf("vLLM rejected smoke test: %s", vllmErr.Message)
+		return false, fmt.Errorf("vLLM rejected smoke test: %s", vllmErr.Error.Message)
 
 	case 401, 403:
 		// key needed: can't tell anything about tools yet
@@ -144,6 +156,7 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 	case 422:
 		// malformed request
 		return false, fmt.Errorf("malformed smoke-test request: %s", bodySnippet(resp.Body))
+
 	case 200:
 		// deep check: did a structured tool call actually come back?
 		var r struct {
