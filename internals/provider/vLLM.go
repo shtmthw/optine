@@ -19,7 +19,9 @@ type VLLMModelsResponse struct {
 }
 
 type VLLMErrorResponse struct {
-	Message string `json:"message"`
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 var vllmClient = &http.Client{
@@ -129,13 +131,14 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 			return false, fmt.Errorf("could not decode vLLM error response: %w", err)
 		}
 
-		if strings.Contains(vllmErr.Message, "--enable-auto-tool-choice") {
+		if strings.Contains(vllmErr.Error.Message, "requires --enable-auto-tool-choice") &&
+			strings.Contains(vllmErr.Error.Message, "--tool-call-parser") {
 			// specifically means auto tool calling isn't configured
 			return false, nil
 		}
 
 		// A different 400 is NOT evidence that tools are disabled.
-		return false, fmt.Errorf("vLLM rejected smoke test: %s", vllmErr.Message)
+		return false, fmt.Errorf("vLLM rejected smoke test: %s", vllmErr.Error.Message)
 
 	case 401, 403:
 		// key needed: can't tell anything about tools yet

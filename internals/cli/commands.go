@@ -7,12 +7,18 @@ import (
 )
 
 // taking in the case for /local
-func RunCommand(reader *bufio.Reader) {
-	// reader := bufio.NewReader(os.Stdin)
+func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) {
+	var command string
 
-	command, err := reader.ReadString('\n')
-	if err != nil {
-		return
+	if externalInput {
+		command = explicitInput
+	} else {
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+
+		command = input
 	}
 
 	command = strings.TrimSpace(command)
@@ -24,9 +30,18 @@ func RunCommand(reader *bufio.Reader) {
 
 	switch command {
 	case "/local":
+		if externalInput {
+			log.Println("not allowed to run /local while in the agent interface")
+			return
+		}
 		log.Println("starting /local execution")
 		// the provider selection
-		selectProvider(reader)
+		if err := selectProvider(reader); err != nil {
+			log.Println(err)
+		}
+
+	case "/funfact":
+		log.Println("this is a one man built agent, and that man is Matthew Baroi")
 
 	default:
 		log.Println("unknown command")
