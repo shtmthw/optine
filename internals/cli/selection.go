@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mattthew/optine/internals/dataTypes"
 	"github.com/mattthew/optine/internals/provider"
 )
 
@@ -90,6 +91,21 @@ func selectProvider(reader *bufio.Reader) error {
 		log.Println("Tool calling available:", hasTools)
 		log.Println("Capablities: ", modelMetaData.Capabilities)
 
+		var agentConf = dataTypes.AgentConfig{
+			Provider:          "Ollama",
+			Model:             selectedModel,
+			NativeToolCalling: hasTools,
+		}
+
+		// run agent interface
+		_, interfaceErr := agentInterface(reader, agentConf)
+
+		if interfaceErr != nil {
+
+			return handleError(interfaceErr)
+
+		}
+
 	case "vLLM":
 		modelName, err := provider.VLLMGetModelData()
 
@@ -108,6 +124,21 @@ func selectProvider(reader *bufio.Reader) error {
 		}
 
 		log.Println("Tool calling available:", nativeToolCall)
+
+		var agentConf = dataTypes.AgentConfig{
+			Provider:          "vLLM",
+			Model:             modelName,
+			NativeToolCalling: nativeToolCall,
+		}
+
+		// run agent interface
+		_, interfaceErr := agentInterface(reader, agentConf)
+
+		if interfaceErr != nil {
+
+			return handleError(interfaceErr)
+
+		}
 
 	case "your mom":
 		log.Println("She got some nice milk jars yo")

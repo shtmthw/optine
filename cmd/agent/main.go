@@ -9,5 +9,5 @@ import (
 
 func main() {
 	bufioReader := bufio.NewReader(os.Stdin)
-	cli.RunCommand(bufioReader)
+	cli.RunCommand("", false, bufioReader)
 }

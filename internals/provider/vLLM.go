@@ -138,8 +138,6 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 			return false, fmt.Errorf("could not decode vLLM error response: %w", err)
 		}
 
-		log.Printf("vLLM error message: %q", vllmErr.Error.Message)
-
 		if strings.Contains(vllmErr.Error.Message, "requires --enable-auto-tool-choice") &&
 			strings.Contains(vllmErr.Error.Message, "--tool-call-parser") {
 			// specifically means auto tool calling isn't configured

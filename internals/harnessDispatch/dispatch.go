@@ -36,7 +36,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.AIRespo
 
 		switch resp {
 		case 1:
-			// allow onceee
+			// allow once
 			return dispatchWebSearch(ctx, call)
 
 		case 2:
