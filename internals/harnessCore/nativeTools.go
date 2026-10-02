@@ -20,7 +20,7 @@ import (
 
 func produceReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName string) dataTypes.NativeToolChatRequest {
 
-	tools := []dataTypes.NativeTypeTool{dataTypes.WebSearch}
+	tools := []dataTypes.NativeTypeTool{dataTypes.WebSearch, dataTypes.ReadFile}
 
 	var requestBody = dataTypes.NativeToolChatRequest{
 		Model:    modelName,
@@ -82,13 +82,14 @@ func inferenceCall(ctx context.Context, reqBody dataTypes.NativeToolChatRequest,
 
 func nativeToolAgentCall(ctx context.Context, reader *bufio.Reader, provider string, modelName string, userMessage string) (string, error) {
 	ollamaURL := "http://localhost:11434/api/chat"
+	time := time.Now()
 	switch provider {
 
 	case "Ollama":
 		messages := []*dataTypes.NativeTooltypeMessage{
 			{
 				Role:    "system",
-				Content: systemPrompts.NativeToolSystemPrompt(),
+				Content: systemPrompts.NativeToolSystemPrompt(time),
 			},
 			{
 				Role:    "user",
@@ -117,7 +118,7 @@ func nativeToolAgentCall(ctx context.Context, reader *bufio.Reader, provider str
 			messages = append(messages, reply)
 
 			for _, tc := range reply.ToolCalls {
-				if tc.Function.Name != "web_search" {
+				if tc.Function.Name != "web_search" && tc.Function.Name != "read_file" {
 					messages = append(messages, &dataTypes.NativeTooltypeMessage{
 						Role:    "tool",
 						Content: fmt.Sprintf("unknown tool %q requested", tc.Function.Name),
@@ -125,7 +126,7 @@ func nativeToolAgentCall(ctx context.Context, reader *bufio.Reader, provider str
 					continue
 				}
 
-				result, err := harnessDispatch.Dispatch(ctx, reader, &dataTypes.AIResponse{
+				result, err := harnessDispatch.Dispatch(ctx, reader, &dataTypes.NativeLLMResponse{
 					Type:      "tool_call",
 					Tool:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,

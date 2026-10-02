@@ -21,3 +21,21 @@ var WebSearch = NativeTypeTool{
 		},
 	},
 }
+
+var ReadFile = NativeTypeTool{
+	Type: "function",
+	Function: NativeTypeToolFunction{
+		Name:        "read_file",
+		Description: "Read the contents of a file from the local filesystem. Use this tool when you need to inspect a file's contents.",
+		Parameters: NativeTypeParameters{
+			Type: "object",
+			Properties: map[string]NativeTypeProperties{
+				"path": {
+					Type:        "string",
+					Description: "The path to the file that should be read",
+				},
+			},
+			Required: []string{"path"},
+		},
+	},
+}
