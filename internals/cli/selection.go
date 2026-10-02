@@ -64,7 +64,7 @@ func selectProvider(reader *bufio.Reader) error {
 		modelSlice, err := provider.OllamaGetModelData()
 
 		if err != nil {
-			return handleError(err)
+			return err
 
 		}
 		selectedModel, err := selectModel(modelSlice, reader)
@@ -82,6 +82,7 @@ func selectProvider(reader *bufio.Reader) error {
 		modelMetaData, err := provider.OllamaGetModelMetaData(selectedModel)
 
 		if err != nil {
+			log.Println("selector conn ref run")
 			return handleError(err)
 
 		}
@@ -110,8 +111,7 @@ func selectProvider(reader *bufio.Reader) error {
 		modelName, err := provider.VLLMGetModelData()
 
 		if err != nil {
-			return handleError(err)
-
+			return err
 		}
 
 		log.Println("Initializing model: ", modelName)

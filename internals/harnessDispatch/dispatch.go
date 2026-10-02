@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mattthew/optine/internals/dataTypes"
+	"github.com/mattthew/optine/internals/harnessPermissions"
 	"github.com/mattthew/optine/internals/harnessTools"
 )
 
@@ -21,14 +22,14 @@ var ErrToolCallRejection = errors.New("the tool call request has been rejected")
 
 var allowList = make(map[string]struct{})
 
-func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.AIResponse) (string, error) {
+func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeLLMResponse) (string, error) {
 	switch call.Tool {
 	case "web_search":
 		if _, allowed := allowList["web_search"]; allowed {
 			return dispatchWebSearch(ctx, call)
 		}
 
-		resp, err := Ask(call.Tool, reader, call.Arguments, call.Content)
+		resp, err := harnessPermissions.Ask(call.Tool, reader, call.Arguments, call.Content)
 		if err != nil {
 			log.Println("error occurred whilst running Ask() in the dispatch:", err)
 			return "", err
@@ -47,6 +48,15 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.AIRespo
 		default:
 			return "User has rejected the tool call request.", ErrToolCallRejection
 		}
+	case "read_file":
+
+		realPath, err := harnessPermissions.ReadFilePolicy(call.Arguments, reader)
+
+		if err != nil {
+			log.Println(err)
+			return "", err
+		}
+		return harnessTools.ReadFile(realPath)
 
 	default:
 		return "", fmt.Errorf(
@@ -56,7 +66,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.AIRespo
 	}
 }
 
-func dispatchWebSearch(ctx context.Context, call *dataTypes.AIResponse) (string, error) {
+func dispatchWebSearch(ctx context.Context, call *dataTypes.NativeLLMResponse) (string, error) {
 	rawQuery, ok := call.Arguments["query"]
 
 	if !ok {

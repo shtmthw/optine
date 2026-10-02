@@ -1,4 +1,4 @@
-package harnessDispatch
+package harnessPermissions
 
 import (
 	"bufio"
