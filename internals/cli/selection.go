@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"slices"
@@ -9,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/mattthew/optine/internals/dataTypes"
+	"github.com/mattthew/optine/internals/harnessCore"
 	"github.com/mattthew/optine/internals/provider"
+	"github.com/mattthew/optine/internals/tui"
 )
 
 var providers = []string{
@@ -98,13 +101,19 @@ func selectProvider(reader *bufio.Reader) error {
 			NativeToolCalling: hasTools,
 		}
 
-		// run agent interface
-		_, interfaceErr := agentInterface(reader, agentConf)
+		agent := func(_ context.Context, _ string, _ string, msg string, r *bufio.Reader) (string, error) {
+			if strings.HasPrefix(strings.TrimSpace(msg), "/") {
+				RunCommand(msg, true, r)
+				return "", nil
+			}
 
-		if interfaceErr != nil {
+			return harnessCore.AgentLoop(msg, agentConf, r)
+		}
 
-			return handleError(interfaceErr)
+		ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, agent)
 
+		if ifaceErr != nil {
+			return handleError(ifaceErr)
 		}
 
 	case "vLLM":
@@ -131,13 +140,19 @@ func selectProvider(reader *bufio.Reader) error {
 			NativeToolCalling: nativeToolCall,
 		}
 
-		// run agent interface
-		_, interfaceErr := agentInterface(reader, agentConf)
+		agent := func(_ context.Context, _ string, _ string, msg string, r *bufio.Reader) (string, error) {
+			if strings.HasPrefix(strings.TrimSpace(msg), "/") {
+				RunCommand(msg, true, r)
+				return "", nil
+			}
 
-		if interfaceErr != nil {
+			return harnessCore.AgentLoop(msg, agentConf, r)
+		}
 
-			return handleError(interfaceErr)
+		ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, agent)
 
+		if ifaceErr != nil {
+			return handleError(ifaceErr)
 		}
 
 	case "your mom":

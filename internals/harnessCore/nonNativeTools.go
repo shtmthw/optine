@@ -144,15 +144,12 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 		},
 	}
 
-	for turn := range maxTurns {
-		log.Println("starting non native turn", turn)
+	for range maxTurns {
 
 		reply, err := chat(ctx, messages, modelName)
 		if err != nil {
 			return "", err
 		}
-
-		log.Println("inference reply on turn", turn, ":", reply)
 
 		aiResponse, err := parseNonNativeResponse(reply.Content)
 		if err != nil {

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -70,7 +69,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		{Role: "user", Content: userMessage},
 	}
 
-	for turn := range maxTurns {
+	for range maxTurns {
 		var response dataTypes.NativeToolChatResponse
 
 		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(history, modelName), &response)
@@ -79,8 +78,6 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		}
 
 		reply := &response.Message
-
-		log.Println("inference reply on turn", turn, ":", reply)
 
 		// A tool-calling turn carries empty content, so tool calls have to be
 		// checked before treating empty content as an error.
@@ -115,7 +112,7 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 		{Role: "user", Content: userMessage},
 	}
 
-	for turn := range maxTurns {
+	for range maxTurns {
 		var response dataTypes.VLLMNChatResponse
 
 		err := postJSON(ctx, vLLMChatURL, produceVLLMReqBody(history, modelName), &response)
@@ -140,8 +137,6 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 				return "", fmt.Errorf("tool call %q: %w", toolCall.Function.Name, err)
 			}
 		}
-
-		log.Println("inference reply on turn", turn, ":", reply)
 
 		// A tool-calling turn carries empty content, so tool calls have to be
 		// checked before treating empty content as an error.
