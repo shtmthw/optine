@@ -3,6 +3,7 @@ package harnessDispatch
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -29,7 +30,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			return dispatchWebSearch(ctx, call)
 		}
 
-		resp, err := harnessPermissions.Ask(call.Tool, reader, call.Arguments, call.Content)
+		resp, err := harnessPermissions.AskFunc(call.Tool, reader, call.Arguments, call.Content)
 		if err != nil {
 			log.Println("error occurred whilst running Ask() in the dispatch:", err)
 			return "", err
@@ -57,6 +58,21 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			return "", err
 		}
 		return harnessTools.ReadFile(realPath)
+
+	case "bash":
+		// The dispatcher speaks map[string]any; the bash tool speaks
+		// json.RawMessage (see decodeBashArgs). Re-encode here so both
+		// native (Ollama map, vLLM JSON string -> map) and non-native
+		// envelope paths funnel through the same classify -> policy ->
+		// ask -> audit -> exec pipeline. BashOutcome.Text already holds
+		// the denied / not-run / output text for the model, so a denial
+		// is a successful dispatch with explanatory text, not an error.
+		raw, err := json.Marshal(call.Arguments)
+		if err != nil {
+			return "", fmt.Errorf("bash: encoding arguments: %w", err)
+		}
+		outcome := harnessTools.BashToolCall(raw, reader)
+		return outcome.Text, nil
 
 	default:
 		return "", fmt.Errorf(
