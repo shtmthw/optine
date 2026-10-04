@@ -17,7 +17,7 @@ const (
 	Remember               // run it and allow this tool for the rest of the session
 )
 
-func Ask(tool string, reader *bufio.Reader, arguments map[string]any, content string) (Answer, error) {
+func AskFunc(tool string, reader *bufio.Reader, arguments map[string]any, content string) (Answer, error) {
 	log.Printf("\nThe agent wants to run:\n  tool: %s", tool)
 
 	encodedArgs, err := json.MarshalIndent(arguments, "  ", "  ")
@@ -31,7 +31,7 @@ func Ask(tool string, reader *bufio.Reader, arguments map[string]any, content st
 		log.Printf("  description: %s", content)
 	}
 
-	log.Print("Allow? [y] once  [a] always (this tool, this session)  [N] no: ")
+	log.Print("Allow? [y] once  [a] always (this tool/command)  [N] no: ")
 
 	line, err := reader.ReadString('\n')
 	if err != nil {

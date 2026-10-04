@@ -170,14 +170,10 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 	return "", ErrMaxToolCalls
 }
 
-// ---------------------------------------------------------------------------
-// Tools
-// ---------------------------------------------------------------------------
-
 // nativeTools is the one list of tools the agent advertises, so the request
 // body and the unknown-tool guard can never drift apart.
 func nativeTools() []dataTypes.NativeTypeTool {
-	return []dataTypes.NativeTypeTool{dataTypes.WebSearch, dataTypes.ReadFile}
+	return []dataTypes.NativeTypeTool{dataTypes.WebSearch, dataTypes.ReadFile, dataTypes.Bash}
 }
 
 func isNativeTool(name string) bool {

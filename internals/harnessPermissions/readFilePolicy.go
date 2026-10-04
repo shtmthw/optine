@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-var approvedDirs = make(map[string]bool)
+var approvedDirs = map[string]bool{
+	cwd: true,
+}
+
 var ErrReadDenied = errors.New("read request has been denied by the user")
 
 // pathArgument pulls the required path out of the model's read_file arguments.
@@ -58,7 +61,7 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 
 	log.Println("Dir path: ", realDir)
 
-	answer, err := Ask(
+	answer, err := AskFunc(
 		"read_file",
 		reader,
 		map[string]any{"path": realPath},
