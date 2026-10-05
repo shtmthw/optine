@@ -16,11 +16,8 @@ import (
 
 var ErrToolCallRejection = errors.New("the tool call request has been rejected")
 
-// rules:
-// 0 is DENIED
-// 1 is Allow ONCE
-// 2 is Allow ALWAYS
-
+// allowList remembers tools the user approved with "always" for this session.
+// Answers are harnessPermissions.Answer values (No/Once/Remember).
 var allowList = make(map[string]struct{})
 
 func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeLLMResponse) (string, error) {
@@ -37,11 +34,11 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		}
 
 		switch resp {
-		case 1:
+		case harnessPermissions.Once:
 			// allow once
 			return dispatchWebSearch(ctx, call)
 
-		case 2:
+		case harnessPermissions.Remember:
 			// always allow this tool
 			allowList["web_search"] = struct{}{}
 			return dispatchWebSearch(ctx, call)

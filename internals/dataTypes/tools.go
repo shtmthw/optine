@@ -52,7 +52,8 @@ var Bash = NativeTypeTool{
 			"uses $(...), backticks, variables, loops, if statements, subshells, heredocs, " +
 			"background jobs (&) or brace expansion like {a,b}. " +
 			"Every call starts in the workspace root, and cd does not carry over to the next call. " +
-			"To create or change the contents of a file, use the file write and edit tools. " +
+			"To create or change the contents of a file, use simple commands with redirects " +
+			"(echo ... > file, cat >> file). " +
 			"Some commands need the user's approval. If a command is denied, do not retry it unchanged.",
 		Parameters: NativeTypeParameters{
 			Type: "object",
