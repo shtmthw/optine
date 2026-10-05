@@ -343,7 +343,7 @@ func classifyRedirs(rs []*syntax.Redirect, dir string) (Class, []Access, error) 
 			}
 			mode = Write // >&file
 		default: // heredocs and here-strings
-			return 0, nil, errors.New("heredocs and here-strings are not supported, use the write tool")
+			return 0, nil, errors.New("heredocs and here-strings are not supported, use redirects (>, >>) with plain commands instead")
 		}
 
 		w, err := evalWord(r.Word)

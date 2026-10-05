@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"log"
 	"os"
 
 	"github.com/mattthew/optine/internals/cli"
@@ -9,5 +10,10 @@ import (
 
 func main() {
 	bufioReader := bufio.NewReader(os.Stdin)
-	cli.RunCommand("", false, bufioReader)
+	log.Println("optine: type /local to start, /help for commands, /quit to exit")
+	for {
+		if quit := cli.RunCommand("", false, bufioReader); quit {
+			break
+		}
+	}
 }

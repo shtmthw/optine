@@ -18,7 +18,6 @@ import (
 var providers = []string{
 	"Ollama",
 	"vLLM",
-	"your mom",
 }
 
 func handleError(err error) error {
@@ -28,7 +27,6 @@ func handleError(err error) error {
 
 func selectOption(reader *bufio.Reader, maxRange int, dataSlice []string) (string, error) {
 	for range maxRange {
-		log.Print("> ")
 
 		input, err := reader.ReadString('\n')
 		if err != nil {
@@ -49,7 +47,7 @@ func selectOption(reader *bufio.Reader, maxRange int, dataSlice []string) (strin
 
 func selectProvider(reader *bufio.Reader) error {
 
-	log.Println("Select a provider:")
+	log.Println("< provider list >")
 
 	for i, provider := range providers {
 		log.Printf("%d. %s\n", i+1, provider)
@@ -149,14 +147,9 @@ func selectProvider(reader *bufio.Reader) error {
 			return harnessCore.AgentLoop(msg, agentConf, r)
 		}
 
-		ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, agent)
-
-		if ifaceErr != nil {
+		if ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, agent); ifaceErr != nil {
 			return handleError(ifaceErr)
 		}
-
-	case "your mom":
-		log.Println("She got some nice milk jars yo")
 	}
 
 	// wont ever reach
@@ -164,7 +157,7 @@ func selectProvider(reader *bufio.Reader) error {
 }
 
 func selectModel(modelSlice []string, reader *bufio.Reader) (string, error) {
-
+	log.Println("< model list >")
 	for i, model := range modelSlice {
 		log.Printf("%d. %s\n", i+1, model)
 	}
