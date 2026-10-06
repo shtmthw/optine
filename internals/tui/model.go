@@ -119,7 +119,31 @@ var (
 
 	optionHoverStyle = optionStyle.
 				Background(lipgloss.Color("141"))
+
+	headingStyle = lipgloss.NewStyle().
+			Bold(true)
+
+	agentTextBase = lipgloss.NewStyle()
+
+	quoteTextBase = lipgloss.NewStyle().
+			Italic(true).
+			Faint(true).
+			Foreground(lipgloss.Color("99"))
+
+	codeBlockStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#D3D3D3")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1)
+
+	codeBlockTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("99")).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1)
 )
+
+// Markdown rendering (wrapping, inline spans, agent layout) lives in
+// markdown.go; model.go keeps Model/Update/View plus theme styles.
 
 func New(
 	provider string,
@@ -259,6 +283,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+u":
 			m.input = ""
 			m.cursor = 0
+
+		case "pgup", "pgdown":
+			// Keyboard scroll: mouse reporting (and with it the wheel) is
+			// off outside approval prompts, so history needs keys.
+			page := m.height / 2
+			if page < 1 {
+				page = 1
+			}
+			if msg.String() == "pgup" {
+				m.scroll += page
+				if m.scroll > m.clicks.maxScroll {
+					m.scroll = m.clicks.maxScroll
+				}
+			} else {
+				m.scroll -= page
+				if m.scroll < 0 {
+					m.scroll = 0
+				}
+			}
 
 		default:
 			if len(msg.Runes) > 0 {
@@ -404,23 +447,29 @@ func (m Model) View() string {
 
 		case "user":
 			b.WriteString(
-				userStyle.Render("> " + message.Content),
+				renderPlainWrapped(message.Content, m.width, userStyle, "> ", "  "),
 			)
 
 		case "agent":
 			b.WriteString(
-				agentStyle.Render(message.Content),
+				renderAgentContent(message.Content, m.width),
 			)
 
 		case "error":
 			b.WriteString(
-				errorStyle.Render("error: " + message.Content),
+				renderPlainWrapped("error: "+message.Content, m.width, errorStyle, "", ""),
 			)
 
 		case "event":
-			b.WriteString(
-				eventStyle.Render(message.Content),
-			)
+			if info, ok := parseEditInfo(message.Content); ok {
+				b.WriteString(renderEditInfo(info, m.width))
+			} else if winfo, ok := parseWriteInfo(message.Content); ok {
+				b.WriteString(renderWriteInfo(winfo, m.width))
+			} else {
+				b.WriteString(
+					renderPlainWrapped(message.Content, m.width, eventStyle, "", ""),
+				)
+			}
 		}
 
 		b.WriteString("\n\n")

@@ -25,7 +25,7 @@ const (
 
 // A model that keeps asking for tools instead of answering gets cut off here
 // rather than looping forever.
-const maxTurns = 12
+const maxTurns = 55
 
 var (
 	ErrMaxToolCalls     = errors.New("maximum tool calls exceeded without an answer")
@@ -73,6 +73,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 	for turn := range maxTurns {
 		var response dataTypes.NativeToolChatResponse
 
+		//the inference call
 		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(history, modelName), &response)
 		if err != nil {
 			return "", err
@@ -173,7 +174,7 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 // nativeTools is the one list of tools the agent advertises, so the request
 // body and the unknown-tool guard can never drift apart.
 func nativeTools() []dataTypes.NativeTypeTool {
-	return []dataTypes.NativeTypeTool{dataTypes.WebSearch, dataTypes.ReadFile, dataTypes.Bash}
+	return []dataTypes.NativeTypeTool{dataTypes.WebSearch, dataTypes.ReadFile, dataTypes.Bash, dataTypes.EditFile, dataTypes.WriteFile}
 }
 
 func isNativeTool(name string) bool {

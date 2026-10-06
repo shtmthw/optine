@@ -1,0 +1,1 @@
+print("i loved freya more than myself, just for her to compare me to her shoe")
