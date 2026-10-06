@@ -47,7 +47,7 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		log.Println("starting /local execution")
 		// the provider selection
 		if err := selectProvider(reader); err != nil {
-			log.Println(err)
+			log.Println("RunCommand error: ", err)
 		}
 		return false
 

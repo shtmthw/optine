@@ -8,6 +8,8 @@
 //   - Commands that parse fine but that we know nothing about get Class Exec
 //     (the caller should ask).
 //   - No methods, plain functions and structs.
+//
+// this is fucking hell yo dont read this shit yo, im serious yo
 package harnessPermissions
 
 import (
@@ -47,8 +49,6 @@ type Action struct {
 
 var homeDir, _ = os.UserHomeDir()
 var cwd, _ = os.Getwd()
-
-// ---------------------------------------------------------------- spec table
 
 type spec struct {
 	Class    Class
@@ -319,8 +319,6 @@ func splitFind(args []word) (starts, expr []word) {
 	return starts, args[i:]
 }
 
-// ---------------------------------------------------------------- redirects
-
 func classifyRedirs(rs []*syntax.Redirect, dir string) (Class, []Access, error) {
 	var class Class
 	var paths []Access
@@ -329,7 +327,7 @@ func classifyRedirs(rs []*syntax.Redirect, dir string) (Class, []Access, error) 
 		switch r.Op {
 		case syntax.RdrIn:
 			mode = Read
-		case syntax.RdrOut, syntax.AppOut, syntax.ClbOut, syntax.RdrAll, syntax.AppAll:
+		case syntax.RdrOut, syntax.AppOut, syntax.RdrClob, syntax.RdrAll, syntax.AppAll:
 			mode = Write
 		case syntax.RdrInOut:
 			mode = Read | Write

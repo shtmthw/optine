@@ -54,6 +54,9 @@ func (s *tuiLogSink) Write(b []byte) (int, error) {
 		s.p.Send(logLineMsg{text: text})
 	}
 
+	// NOTE: the "Allow?" substring match is load-bearing — it is how the
+	// harness approval prompt (AskFunc) surfaces the TUI approval buttons.
+	// Do not "clean" it into a fancier protocol without updating askApproval.
 	if strings.Contains(string(b), "Allow?") {
 		s.p.Send(approvalRequestedMsg{})
 	}

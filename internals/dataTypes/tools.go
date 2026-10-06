@@ -40,8 +40,7 @@ var ReadFile = NativeTypeTool{
 	},
 }
 
-var Bash = NativeTypeTool{
-	Type: "function",
+var Bash = NativeTypeTool{Type: "function",
 	Function: NativeTypeToolFunction{
 		Name: "bash",
 		Description: "Run a shell command in the user's workspace and return its output. " +
@@ -73,6 +72,62 @@ var Bash = NativeTypeTool{
 				},
 			},
 			Required: []string{"command"},
+		},
+	},
+}
+
+var EditFile = NativeTypeTool{
+	Type: "function",
+	Function: NativeTypeToolFunction{
+		Name: "edit_file",
+		Description: "Replace one exact text block in an existing file with new text. " +
+			"Use it after read_file when you need to change a file. " +
+			"old_string must match exactly once; if it matches zero or multiple times the call fails. " +
+			"Add more surrounding context to make it unique. The file must already exist. " +
+			"Texts over 256KB combined are rejected; split into smaller edits.",
+		Parameters: NativeTypeParameters{
+			Type: "object",
+			Properties: map[string]NativeTypeProperties{
+				"path": {
+					Type:        "string",
+					Description: "The path to the existing file to edit",
+				},
+				"old_string": {
+					Type:        "string",
+					Description: "The exact text to replace, must occur exactly once in the file",
+				},
+				"new_string": {
+					Type:        "string",
+					Description: "The replacement text",
+				},
+			},
+			Required: []string{"path", "old_string", "new_string"},
+		},
+	},
+}
+
+var WriteFile = NativeTypeTool{
+	Type: "function",
+	Function: NativeTypeToolFunction{
+		Name: "write_file",
+		Description: "Create a new file with the given content. " +
+			"Use it when you need to create a file that does not exist yet. " +
+			"Fails if the file already exists (use edit_file to change it). " +
+			"Missing parent directories are created. Never writes through symlinks. " +
+			"Content over 256KB is rejected; split into smaller writes.",
+		Parameters: NativeTypeParameters{
+			Type: "object",
+			Properties: map[string]NativeTypeProperties{
+				"path": {
+					Type:        "string",
+					Description: "The path of the file to create",
+				},
+				"content": {
+					Type:        "string",
+					Description: "The full content to write into the new file (may be empty)",
+				},
+			},
+			Required: []string{"path", "content"},
 		},
 	},
 }
