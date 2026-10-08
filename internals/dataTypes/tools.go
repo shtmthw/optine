@@ -84,6 +84,7 @@ var EditFile = NativeTypeTool{
 			"Use it after read_file when you need to change a file. " +
 			"old_string must match exactly once; if it matches zero or multiple times the call fails. " +
 			"Add more surrounding context to make it unique. The file must already exist. " +
+			"Pass append=true to append new_string byte-for-byte to the end of the file instead (old_string is then ignored). " +
 			"Texts over 256KB combined are rejected; split into smaller edits.",
 		Parameters: NativeTypeParameters{
 			Type: "object",
@@ -94,11 +95,15 @@ var EditFile = NativeTypeTool{
 				},
 				"old_string": {
 					Type:        "string",
-					Description: "The exact text to replace, must occur exactly once in the file",
+					Description: "The exact text to replace, must occur exactly once in the file (ignored when append is true)",
 				},
 				"new_string": {
 					Type:        "string",
-					Description: "The replacement text",
+					Description: "The replacement text, or the text to append when append is true",
+				},
+				"append": {
+					Type:        "boolean",
+					Description: "Optional, defaults to false. When true, new_string is appended to the end of the file and old_string is ignored",
 				},
 			},
 			Required: []string{"path", "old_string", "new_string"},

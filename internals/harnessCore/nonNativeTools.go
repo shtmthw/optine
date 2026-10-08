@@ -136,7 +136,7 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 	var messages = []*dataTypes.NonNativeMessage{
 		{
 			Role:    "system",
-			Content: systemPrompts.NonNativeToolSystemPrompt(time.Now(), maxTurns),
+			Content: withCasualMemory(systemPrompts.NonNativeToolSystemPrompt(time.Now(), maxTurns)),
 		},
 		{
 			Role:    "user",
