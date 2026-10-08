@@ -15,6 +15,7 @@ import (
 
 	"github.com/mattthew/optine/internals/dataTypes"
 	"github.com/mattthew/optine/internals/harnessDispatch"
+	"github.com/mattthew/optine/internals/harnessMemory"
 	"github.com/mattthew/optine/internals/systemPrompts"
 )
 
@@ -57,6 +58,23 @@ func nativeToolAgentCall(ctx context.Context, reader *bufio.Reader, provider str
 	}
 }
 
+// withCasualMemory appends the user's long-term memory to base, once per
+// agent-loop trigger at history construction. Best-effort: any failure logs
+// and returns base unchanged so a memory hiccup never aborts the run.
+func withCasualMemory(base string) string {
+	memoryPath, err := harnessMemory.CasualMemoryPath()
+	if err != nil {
+		log.Printf("casual memory path unavailable: %v", err)
+		return base
+	}
+	memoryData, err := harnessMemory.ReadCasualMemoryFile()
+	if err != nil {
+		log.Printf("casual memory unavailable: %v", err)
+		return base
+	}
+	return systemPrompts.WithCasualMemory(base, memoryPath, memoryData)
+}
+
 // ---------------------------------------------------------------------------
 // The two agent loops
 //
@@ -66,7 +84,7 @@ func nativeToolAgentCall(ctx context.Context, reader *bufio.Reader, provider str
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
 	history := []*dataTypes.NativeTooltypeMessage{
-		{Role: "system", Content: systemPrompts.NativeToolSystemPrompt(time.Now())},
+		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now()))},
 		{Role: "user", Content: userMessage},
 	}
 
@@ -112,7 +130,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
 	history := []*dataTypes.VLLMTooltypeMessage{
-		{Role: "system", Content: systemPrompts.NativeToolSystemPrompt(time.Now())},
+		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now()))},
 		{Role: "user", Content: userMessage},
 	}
 

@@ -23,6 +23,14 @@ type AgentFunc func(
 	reader *bufio.Reader,
 ) (string, error)
 
+// Roles a Message can have.
+const (
+	roleUser  = "user"
+	roleAgent = "agent"
+	roleError = "error"
+	roleEvent = "event"
+)
+
 type Message struct {
 	Role    string
 	Content string
@@ -30,9 +38,22 @@ type Message struct {
 
 // approvalOption is one clickable "[y] once" style hotspot.
 type approvalOption struct {
-	start, end int
+	start, end int // column range [start, end) on the options row
 	answer     string
 }
+
+// approvalChoices are the buttons shown while an approval is pending.
+var approvalChoices = []struct{ label, answer string }{
+	{"[y] once", "y"},
+	{"[a] always", "a"},
+	{"[N] no", "n"},
+}
+
+const (
+	wheelStep   = 3    // lines scrolled per mouse-wheel notch
+	buttonGap   = "  " // spacing between approval buttons
+	cursorGlyph = "█"
+)
 
 type Model struct {
 	provider  string
@@ -56,14 +77,15 @@ type Model struct {
 	spinnerFrame int
 	height       int
 	width        int
-	scroll       int
+	scroll       int // lines scrolled up from the bottom of the history
 }
 
+// clickTargets is written by View and read by Update.
 type clickTargets struct {
-	row       int
+	row       int // screen row of the approval buttons
 	opts      []approvalOption
-	visible   bool
-	maxScroll int
+	visible   bool // whether the buttons are on screen right now
+	maxScroll int  // largest valid Model.scroll for the current content
 }
 
 type agentFinishedMsg struct {
@@ -83,13 +105,13 @@ type tickMsg struct{}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// Styles used by the chat view in this file.
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Italic(true).
 			Foreground(lipgloss.Color("#D3D3D3")).
-			Border(lipgloss.HiddenBorder()).
-			BorderForeground(lipgloss.Color("99"))
+			Border(lipgloss.HiddenBorder())
 
 	userStyle = lipgloss.NewStyle().
 			Bold(true)
@@ -119,7 +141,11 @@ var (
 
 	optionHoverStyle = optionStyle.
 				Background(lipgloss.Color("141"))
+)
 
+// Markdown rendering (wrapping, inline spans, agent layout) lives in
+// markdown.go, which uses these styles.
+var (
 	headingStyle = lipgloss.NewStyle().
 			Bold(true)
 
@@ -142,9 +168,6 @@ var (
 				Padding(0, 1)
 )
 
-// Markdown rendering (wrapping, inline spans, agent layout) lives in
-// markdown.go; model.go keeps Model/Update/View plus theme styles.
-
 func New(
 	provider string,
 	modelName string,
@@ -158,7 +181,6 @@ func New(
 		agent:      agent,
 		reader:     reader,
 		approvalCh: approvalCh,
-		messages:   make([]Message, 0),
 		clicks:     &clickTargets{},
 	}
 }
@@ -171,6 +193,16 @@ func tick() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return tickMsg{}
 	})
+}
+
+// sendApproval hands the user's answer to the harness from a command, so
+// Update never blocks on the channel (and can't freeze the UI if the harness
+// isn't reading at that moment).
+func sendApproval(ch chan<- string, answer string) tea.Cmd {
+	return func() tea.Msg {
+		ch <- answer
+		return nil
+	}
 }
 
 // optionAt returns the answer of the approval button at cell (x, y), or "" if none.
@@ -188,166 +220,22 @@ func optionAt(c *clickTargets, x, y int) string {
 	return ""
 }
 
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.KeyMsg:
-		switch msg.String() {
+		return m.updateKey(msg)
 
-		case "ctrl+c":
-			return m, tea.Quit
-
-		case "alt+c":
-			if text := lastAgentMessage(m.messages); text != "" {
-				_ = clipboard.WriteAll(text)
-			}
-
-		case "left":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-
-		case "right":
-			if m.cursor < len([]rune(m.input)) {
-				m.cursor++
-			}
-
-		case "enter":
-			// While an approval prompt is pending, whatever the user
-			// typed is an answer to that prompt, not a chat message.
-			if m.busy && m.pendingApproval {
-				answer := strings.TrimSpace(m.input)
-				m.input = ""
-				m.cursor = 0
-				m.pendingApproval = false
-				m.approvalCh <- answer
-				return m, nil
-			}
-
-			if m.busy {
-				return m, nil
-			}
-
-			userMessage := strings.TrimSpace(m.input)
-
-			if userMessage == "" {
-				return m, nil
-			}
-
-			m.messages = append(m.messages, Message{
-				Role:    "user",
-				Content: userMessage,
-			})
-
-			m.input = ""
-			m.cursor = 0
-			m.busy = true
-			m.spinnerFrame = 0
-
-			return m, tea.Batch(
-				runAgent(
-					m.agent,
-					m.provider,
-					m.modelName,
-					userMessage,
-					m.reader,
-				),
-				tick(),
-			)
-
-		case "backspace", "ctrl+h":
-			if m.cursor == 0 {
-				return m, nil
-			}
-
-			runes := []rune(m.input)
-			m.input = string(runes[:m.cursor-1]) + string(runes[m.cursor:])
-			m.cursor--
-
-		case "delete":
-			runes := []rune(m.input)
-
-			if m.cursor >= len(runes) {
-				return m, nil
-			}
-
-			m.input = string(runes[:m.cursor]) + string(runes[m.cursor+1:])
-
-		case "ctrl+w":
-			runes := []rune(m.input)
-			before := deleteLastWord(string(runes[:m.cursor]))
-
-			m.input = before + string(runes[m.cursor:])
-			m.cursor = len([]rune(before))
-
-		case "ctrl+u":
-			m.input = ""
-			m.cursor = 0
-
-		case "pgup", "pgdown":
-			// Keyboard scroll: mouse reporting (and with it the wheel) is
-			// off outside approval prompts, so history needs keys.
-			page := m.height / 2
-			if page < 1 {
-				page = 1
-			}
-			if msg.String() == "pgup" {
-				m.scroll += page
-				if m.scroll > m.clicks.maxScroll {
-					m.scroll = m.clicks.maxScroll
-				}
-			} else {
-				m.scroll -= page
-				if m.scroll < 0 {
-					m.scroll = 0
-				}
-			}
-
-		default:
-			if len(msg.Runes) > 0 {
-				runes := []rune(m.input)
-				m.input = string(runes[:m.cursor]) + string(msg.Runes) + string(runes[m.cursor:])
-				m.cursor += len(msg.Runes)
-			}
-		}
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
 		m.width = msg.Width
-
-	case tea.MouseMsg:
-		switch {
-		case msg.Button == tea.MouseButtonWheelUp:
-			m.scroll += 3
-			if m.scroll > m.clicks.maxScroll {
-				m.scroll = m.clicks.maxScroll
-			}
-
-		case msg.Button == tea.MouseButtonWheelDown:
-			m.scroll -= 3
-			if m.scroll < 0 {
-				m.scroll = 0
-			}
-
-		case msg.Action == tea.MouseActionMotion:
-			m.hovered = ""
-
-			if m.pendingApproval {
-				m.hovered = optionAt(m.clicks, msg.X, msg.Y)
-			}
-
-		case msg.Action == tea.MouseActionPress &&
-			msg.Button == tea.MouseButtonLeft &&
-			m.pendingApproval:
-			if answer := optionAt(m.clicks, msg.X, msg.Y); answer != "" {
-				m.input = ""
-				m.cursor = 0
-				m.pendingApproval = false
-				m.hovered = ""
-				m.approvalCh <- answer
-				return m, nil
-			}
-		}
 
 	case agentFinishedMsg:
 		m.busy = false
@@ -356,29 +244,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.err != nil {
 			m.messages = append(m.messages, Message{
-				Role:    "error",
+				Role:    roleError,
 				Content: msg.err.Error(),
 			})
-
-			return m, nil
-		}
-
-		if strings.TrimSpace(msg.response) != "" {
+		} else if strings.TrimSpace(msg.response) != "" {
 			m.messages = append(m.messages, Message{
-				Role:    "agent",
+				Role:    roleAgent,
 				Content: msg.response,
 			})
 		}
 
 	case logLineMsg:
 		m.messages = append(m.messages, Message{
-			Role:    "event",
+			Role:    roleEvent,
 			Content: msg.text,
 		})
 
 	case approvalRequestedMsg:
 		m.pendingApproval = true
 		m.hovered = ""
+		m.scroll = 0 // make sure the prompt is on screen
 
 	case tickMsg:
 		if m.busy {
@@ -388,6 +273,207 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "alt+c":
+		if text := lastAgentMessage(m.messages); text != "" {
+			_ = clipboard.WriteAll(text)
+		}
+
+	case "left":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+
+	case "right":
+		if m.cursor < len([]rune(m.input)) {
+			m.cursor++
+		}
+
+	case "enter":
+		return m.submit()
+
+	case "backspace", "ctrl+h":
+		if m.cursor > 0 {
+			runes := []rune(m.input)
+			m.input = string(runes[:m.cursor-1]) + string(runes[m.cursor:])
+			m.cursor--
+		}
+
+	case "delete":
+		if runes := []rune(m.input); m.cursor < len(runes) {
+			m.input = string(runes[:m.cursor]) + string(runes[m.cursor+1:])
+		}
+
+	case "ctrl+w":
+		runes := []rune(m.input)
+		before := deleteLastWord(string(runes[:m.cursor]))
+
+		m.input = before + string(runes[m.cursor:])
+		m.cursor = len([]rune(before))
+
+	case "ctrl+u":
+		m.input = ""
+		m.cursor = 0
+
+	// Keyboard scroll: mouse reporting (and with it the wheel) is off
+	// outside approval prompts, so history needs keys.
+	case "pgup":
+		m.scroll = m.scrolledBy(m.pageSize())
+
+	case "pgdown":
+		m.scroll = m.scrolledBy(-m.pageSize())
+
+	default:
+		// Alt+<key> is a shortcut, not text.
+		if len(msg.Runes) > 0 && !msg.Alt {
+			runes := []rune(m.input)
+			typed := promptSafe(msg.Runes)
+
+			m.input = string(runes[:m.cursor]) + string(typed) + string(runes[m.cursor:])
+			m.cursor += len(typed)
+		}
+	}
+
+	return m, nil
+}
+
+// submit handles Enter: it answers a pending approval, or sends the typed
+// text to the agent as a new chat message.
+func (m Model) submit() (tea.Model, tea.Cmd) {
+	// While an approval prompt is pending, whatever the user typed is an
+	// answer to that prompt, not a chat message.
+	if m.busy && m.pendingApproval {
+		return m.answerApproval(strings.TrimSpace(m.input))
+	}
+
+	if m.busy {
+		return m, nil
+	}
+
+	userMessage := strings.TrimSpace(m.input)
+	if userMessage == "" {
+		return m, nil
+	}
+
+	m.messages = append(m.messages, Message{
+		Role:    roleUser,
+		Content: userMessage,
+	})
+
+	m.input = ""
+	m.cursor = 0
+	m.busy = true
+	m.spinnerFrame = 0
+	m.scroll = 0 // jump to the bottom so the new message is visible
+
+	return m, tea.Batch(
+		runAgent(
+			m.agent,
+			m.provider,
+			m.modelName,
+			userMessage,
+			m.reader,
+		),
+		tick(),
+	)
+}
+
+// answerApproval clears the prompt and forwards the answer to the harness.
+func (m Model) answerApproval(answer string) (tea.Model, tea.Cmd) {
+	m.input = ""
+	m.cursor = 0
+	m.pendingApproval = false
+	m.hovered = ""
+
+	return m, sendApproval(m.approvalCh, answer)
+}
+
+func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp:
+		m.scroll = m.scrolledBy(wheelStep)
+
+	case msg.Button == tea.MouseButtonWheelDown:
+		m.scroll = m.scrolledBy(-wheelStep)
+
+	case msg.Action == tea.MouseActionMotion:
+		m.hovered = ""
+
+		if m.pendingApproval {
+			m.hovered = optionAt(m.clicks, msg.X, msg.Y)
+		}
+
+	case msg.Action == tea.MouseActionPress &&
+		msg.Button == tea.MouseButtonLeft &&
+		m.pendingApproval:
+		if answer := optionAt(m.clicks, msg.X, msg.Y); answer != "" {
+			return m.answerApproval(answer)
+		}
+	}
+
+	return m, nil
+}
+
+// scrolledBy returns the scroll offset after moving delta lines up (positive)
+// or down (negative), kept within what the current content allows.
+func (m Model) scrolledBy(delta int) int {
+	limit := m.clicks.maxScroll
+	return clampInt(clampInt(m.scroll, 0, limit)+delta, 0, limit)
+}
+
+// pageSize is the number of lines PgUp/PgDn move: half a screen, at least one.
+func (m Model) pageSize() int {
+	if page := m.height / 2; page > 1 {
+		return page
+	}
+
+	return 1
+}
+
+// ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+
+	return v
+}
+
+// cutRunes truncates s to at most n runes.
+func cutRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+
+	return s
+}
+
+// promptSafe makes typed or pasted text fit the single-row prompt by turning
+// line breaks and tabs into spaces.
+func promptSafe(runes []rune) []rune {
+	out := make([]rune, len(runes))
+
+	for i, r := range runes {
+		if r == '\n' || r == '\r' || r == '\t' {
+			r = ' '
+		}
+		out[i] = r
+	}
+
+	return out
 }
 
 func deleteLastWord(s string) string {
@@ -402,7 +488,7 @@ func deleteLastWord(s string) string {
 
 func lastAgentMessage(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "agent" {
+		if messages[i].Role == roleAgent {
 			return messages[i].Content
 		}
 	}
@@ -410,27 +496,28 @@ func lastAgentMessage(messages []Message) string {
 	return ""
 }
 
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
 // centeredTitle renders the title centered in the terminal width so it
 // always stays in the middle at any resolution.
 func centeredTitle(width int) string {
 	const text = "You are now running Optine."
+
 	if width <= 0 {
 		return titleStyle.Render(text)
 	}
+
 	if width < 4 {
-		if r := []rune(text); len(r) > width {
-			return string(r[:width])
-		}
-		return text
+		return cutRunes(text, width)
 	}
+
 	// The hidden border still occupies a cell on each side, so the
 	// content width is the terminal width minus 2.
 	inner := width - 2
-	t := text
-	if r := []rune(text); len(r) > inner {
-		t = string(r[:inner])
-	}
-	return titleStyle.Width(inner).Align(lipgloss.Center).Render(t)
+
+	return titleStyle.Width(inner).Align(lipgloss.Center).Render(cutRunes(text, inner))
 }
 
 func (m Model) View() string {
@@ -440,38 +527,8 @@ func (m Model) View() string {
 	b.WriteString(centeredTitle(m.width))
 	b.WriteString("\n\n")
 
-	optionsRow := -1
-
 	for _, message := range m.messages {
-		switch message.Role {
-
-		case "user":
-			b.WriteString(
-				renderPlainWrapped(message.Content, m.width, userStyle, "> ", "  "),
-			)
-
-		case "agent":
-			b.WriteString(
-				renderAgentContent(message.Content, m.width),
-			)
-
-		case "error":
-			b.WriteString(
-				renderPlainWrapped("error: "+message.Content, m.width, errorStyle, "", ""),
-			)
-
-		case "event":
-			if info, ok := parseEditInfo(message.Content); ok {
-				b.WriteString(renderEditInfo(info, m.width))
-			} else if winfo, ok := parseWriteInfo(message.Content); ok {
-				b.WriteString(renderWriteInfo(winfo, m.width))
-			} else {
-				b.WriteString(
-					renderPlainWrapped(message.Content, m.width, eventStyle, "", ""),
-				)
-			}
-		}
-
+		b.WriteString(m.renderMessage(message))
 		b.WriteString("\n\n")
 	}
 
@@ -482,53 +539,99 @@ func (m Model) View() string {
 		b.WriteString("\n\n")
 	}
 
+	optionsRow := -1
 	if m.pendingApproval {
-		b.WriteString(
-			approvalStyle.Render("approval required — type y/a/n, or click:"),
-		)
-		b.WriteString("\n")
-
-		optionsRow = strings.Count(b.String(), "\n")
-		m.clicks.opts = nil
-
-		options := []struct {
-			label  string
-			answer string
-		}{
-			{"[y] once", "y"},
-			{"[a] always", "a"},
-			{"[N] no", "n"},
-		}
-
-		col := 0
-		for i, opt := range options {
-			if i > 0 {
-				b.WriteString("  ")
-				col += 2
-			}
-
-			style := optionStyle
-			if opt.answer == m.hovered {
-				style = optionHoverStyle
-			}
-
-			// the style adds 1 space of padding on each side.
-			b.WriteString(style.Render(opt.label))
-			m.clicks.opts = append(m.clicks.opts, approvalOption{
-				start:  col,
-				end:    col + len(opt.label) + 2,
-				answer: opt.answer,
-			})
-			col += len(opt.label) + 2
-		}
-
-		b.WriteString("\n\n")
+		optionsRow = m.writeApproval(&b)
 	}
 
-	// Scroll window: keep the newest (height-1) lines of history visible,
-	// shifted up by the user's wheel scroll offset; the prompt is pinned
-	// at the bottom.
-	lines := strings.Split(b.String(), "\n")
+	visible := m.visibleLines(b.String(), optionsRow)
+
+	var out strings.Builder
+	out.WriteString(strings.Join(visible, "\n"))
+
+	// Lock the prompt to the bottom-left: pad with blank rows so it lands
+	// on the last screen row at any resolution.
+	if pad := m.height - 1 - len(visible); pad > 0 {
+		out.WriteString(strings.Repeat("\n", pad))
+	}
+
+	out.WriteString("\n" + m.renderPrompt())
+
+	return out.String()
+}
+
+func (m Model) renderMessage(message Message) string {
+	switch message.Role {
+
+	case roleUser:
+		return renderPlainWrapped(message.Content, m.width, userStyle, "> ", "  ")
+
+	case roleAgent:
+		return renderAgentContent(message.Content, m.width)
+
+	case roleError:
+		return renderPlainWrapped("error: "+message.Content, m.width, errorStyle, "", "")
+
+	case roleEvent:
+		if info, ok := parseEditInfo(message.Content); ok {
+			return renderEditInfo(info, m.width)
+		}
+		if info, ok := parseWriteInfo(message.Content); ok {
+			return renderWriteInfo(info, m.width)
+		}
+		return renderPlainWrapped(message.Content, m.width, eventStyle, "", "")
+	}
+
+	return ""
+}
+
+// writeApproval appends the approval prompt and its clickable buttons to b.
+// It records each button's column range for mouse hit-testing and returns the
+// row (within b's output) that the buttons are on.
+func (m Model) writeApproval(b *strings.Builder) int {
+	b.WriteString(
+		approvalStyle.Render("approval required — type y/a/n, or click:"),
+	)
+	b.WriteString("\n")
+
+	row := strings.Count(b.String(), "\n")
+	m.clicks.opts = nil
+
+	col := 0
+	for i, choice := range approvalChoices {
+		if i > 0 {
+			b.WriteString(buttonGap)
+			col += len(buttonGap)
+		}
+
+		style := optionStyle
+		if choice.answer == m.hovered {
+			style = optionHoverStyle
+		}
+
+		button := style.Render(choice.label)
+		width := lipgloss.Width(button)
+
+		b.WriteString(button)
+		m.clicks.opts = append(m.clicks.opts, approvalOption{
+			start:  col,
+			end:    col + width,
+			answer: choice.answer,
+		})
+		col += width
+	}
+
+	b.WriteString("\n\n")
+
+	return row
+}
+
+// visibleLines picks the part of the history to show: the newest (height-1)
+// lines, shifted up by the scroll offset; the prompt is pinned below them.
+// It also records the scroll limit and whether the approval buttons (on
+// optionsRow, or -1) are on screen, for the next Update.
+func (m Model) visibleLines(history string, optionsRow int) []string {
+	lines := strings.Split(history, "\n")
 
 	contentHeight := m.height - 1
 	if contentHeight < 1 {
@@ -541,70 +644,50 @@ func (m Model) View() string {
 	}
 	m.clicks.maxScroll = maxScroll
 
-	if m.scroll > maxScroll {
-		m.scroll = maxScroll
-	}
-
-	end := len(lines) - m.scroll
+	end := len(lines) - clampInt(m.scroll, 0, maxScroll)
 	start := end - contentHeight
 	if start < 0 {
 		start = 0
 	}
 
-	visible := lines[start:end]
-
-	m.clicks.visible = false
-	if optionsRow >= start && optionsRow < end {
+	m.clicks.visible = optionsRow >= start && optionsRow < end
+	if m.clicks.visible {
 		m.clicks.row = optionsRow - start
-		m.clicks.visible = true
 	}
 
+	return lines[start:end]
+}
+
+// renderPrompt draws the single-row "> input" prompt. The input is windowed
+// around the cursor so "> " always starts at column 0.
+func (m Model) renderPrompt() string {
 	runes := []rune(m.input)
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	if m.cursor > len(runes) {
-		m.cursor = len(runes)
-	}
+	cursor := clampInt(m.cursor, 0, len(runes))
 
-	var out strings.Builder
-	out.WriteString(strings.Join(visible, "\n"))
+	body := []rune(string(runes[:cursor]) + cursorGlyph + string(runes[cursor:]))
 
-	// Lock the prompt to the bottom-left: pad with blank rows so it lands
-	// on the last screen row at any resolution.
-	if m.height > 1 {
-		if pad := m.height - 1 - len(visible); pad > 0 {
-			out.WriteString(strings.Repeat("\n", pad))
+	if maxBody := m.width - 2; m.width > 2 && len(body) > maxBody { // room for "> "
+		// Show a maxBody-wide window that ends at the cursor, or starts at
+		// the beginning of the input if the cursor is near it.
+		start := cursor + 1 - maxBody
+		if start < 0 {
+			start = 0
 		}
+
+		end := start + maxBody
+		if end > len(body) {
+			end = len(body)
+		}
+
+		body = body[start:end]
 	}
 
-	// Keep the prompt on a single row: window the input around the cursor
-	// so "> " always starts at column 0.
-	body := string(runes[:m.cursor]) + "█" + string(runes[m.cursor:])
-	if m.width > 2 {
-		maxBody := m.width - 2 // room for "> "
-		bodyRunes := []rune(body)
-		if len(bodyRunes) > maxBody {
-			end := m.cursor + 1
-			if end > len(bodyRunes) {
-				end = len(bodyRunes)
-			}
-			start := end - maxBody
-			if start < 0 {
-				start = 0
-			}
-			body = string(bodyRunes[start:end])
-		}
-	}
-	prompt := "> " + body
+	prompt := "> " + string(body)
 	if m.width > 0 {
-		if pr := []rune(prompt); len(pr) > m.width {
-			prompt = string(pr[:m.width])
-		}
+		prompt = cutRunes(prompt, m.width)
 	}
-	out.WriteString("\n" + prompt)
 
-	return out.String()
+	return prompt
 }
 
 func runAgent(

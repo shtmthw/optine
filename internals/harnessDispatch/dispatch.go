@@ -60,15 +60,18 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 	case "edit_file":
 		// Policy resolves and approves the path (cwd pre-approved, other
 		// dirs ask once, sensitive/symlink/hardlink always ask); execution
-		// does one exact old->new replacement and returns a deterministic
-		// harness reply built from what was actually read and written.
-		realPath, oldString, newString, err := harnessPermissions.EditFilePolicy(call.Arguments, reader)
+		// does one exact old->new replacement (or a byte-for-byte append
+		// when the optional "append" argument is true) and returns a
+		// deterministic harness reply built from what was actually read
+		// and written.
+		doAppend := harnessPermissions.EditAppendFlag(call.Arguments)
+		realPath, oldString, newString, err := harnessPermissions.EditFilePolicy(call.Arguments, reader, doAppend)
 		if err != nil {
 			log.Println(err)
 			auditFileTool("edit_file", call.Arguments, "", "", "deny", fileDenyBy(err), err.Error())
 			return "", err
 		}
-		info, err := harnessTools.EditFile(realPath, oldString, newString)
+		info, err := harnessTools.EditFile(realPath, oldString, newString, doAppend)
 		if err != nil {
 			log.Println(err)
 			auditFileTool("edit_file", call.Arguments, realPath, filepath.Dir(realPath), "deny", "policy", err.Error())

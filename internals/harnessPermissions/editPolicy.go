@@ -67,6 +67,41 @@ func editArgs(arguments map[string]any) (path, oldString, newString string, err 
 	return path, oldString, newString, nil
 }
 
+// additionArgs pulls the edit_file append-mode arguments out of the model's
+// request. Same idea as editArgs minus old_string: the addition is appended
+// byte-for-byte, so there is nothing to match.
+func additionArgs(arguments map[string]any) (path, newString string, err error) {
+	if path, err = editStringArg(arguments, "path"); err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", "", errors.New("edit_file: path cannot be empty")
+	}
+
+	if newString, err = editStringArg(arguments, "new_string"); err != nil {
+		return "", "", err
+	}
+	if newString == "" {
+		return "", "", errors.New("edit_file: new_string cannot be empty")
+	}
+	if len(newString) > MaxFileToolBytes {
+		return "", "", fmt.Errorf("edit_file: new_string is %d bytes, over the %d byte limit; split into smaller edits", len(newString), MaxFileToolBytes)
+	}
+
+	return path, newString, nil
+}
+
+// EditAppendFlag reads the optional edit_file "append" argument. Missing,
+// non-bool, or false means a normal old->new replacement.
+func EditAppendFlag(arguments map[string]any) bool {
+	appendRaw, ok := arguments["append"]
+	if !ok {
+		return false
+	}
+	appendFlag, ok := appendRaw.(bool)
+	return ok && appendFlag
+}
+
 // editAsk is AskFunc for edit_file with fixed arguments. redact hides the
 // texts (lengths only) so sensitive content never reaches approval logs.
 func editAsk(reader *bufio.Reader, path, oldString, newString, prompt string, redact bool) (Answer, error) {
@@ -87,10 +122,20 @@ func editAsk(reader *bufio.Reader, path, oldString, newString, prompt string, re
 //     via AskFunc, with Remember storing the dir in approvedEditDirs
 //
 // It returns the resolved real path plus the verified old/new strings.
-func EditFilePolicy(arguments map[string]any, reader *bufio.Reader) (realPath, oldString, newString string, err error) {
-	modelPath, oldString, newString, err := editArgs(arguments)
-	if err != nil {
-		return "", "", "", err
+// In append mode (isAddition) old_string is not required and returns empty;
+// new_string is appended byte-for-byte by the executor.
+func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition bool) (realPath, oldString, newString string, err error) {
+	var modelPath string
+	var argumentErr error
+
+	if isAddition {
+		modelPath, newString, argumentErr = additionArgs(arguments)
+	} else {
+		modelPath, oldString, newString, argumentErr = editArgs(arguments)
+	}
+
+	if argumentErr != nil {
+		return "", "", "", argumentErr
 	}
 
 	// Lstat the path as the model gave it, before resolving anything. It does

@@ -27,6 +27,8 @@ edit_file
 Replace one exact text block in an existing file. Read the file first, then pass
 the exact old_string (must occur exactly once) and the new_string. The file must
 already exist. If it matches zero or multiple times, add more context.
+Pass append=true to append new_string to the end of the file instead
+(old_string is then ignored).
 
 write_file
 Create a new file with the given content. Fails if the file already exists (use
@@ -99,7 +101,9 @@ Rules:
 3. Never invent tool names. Only web_search, read_file, edit_file, write_file and bash exist.
 4. web_search takes an "arguments.query" string. read_file takes an
    "arguments.path" string. edit_file takes "arguments.path", "arguments.old_string"
-   and "arguments.new_string" strings (read first so old_string is exact).
+   and "arguments.new_string" strings (read first so old_string is exact),
+   plus an optional "arguments.append" boolean (when true, new_string is
+   appended to the end of the file and old_string is ignored).
    write_file takes "arguments.path" and "arguments.content" strings.
    edit_file and write_file reject texts over 256KB; split large changes.
    bash takes a required "arguments.command" string,

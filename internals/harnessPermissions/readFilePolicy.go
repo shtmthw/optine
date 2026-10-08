@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var approvedDirs = map[string]bool{
+var approvedReadDirs = map[string]bool{
 	cwd: true,
 }
 
@@ -55,7 +55,7 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 	realDir := filepath.Dir(realPath)
 
 	// The entire directory has already been approved for this session.
-	if approvedDirs[realDir] {
+	if approvedReadDirs[realDir] {
 		return realPath, nil
 	}
 
@@ -79,7 +79,7 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 	case Remember:
 		// Allow read_file access to this directory for the rest of
 		// the current session.
-		approvedDirs[realDir] = true
+		approvedReadDirs[realDir] = true
 		return realPath, nil
 
 	default:
