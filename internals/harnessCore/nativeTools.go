@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -18,7 +19,9 @@ import (
 	"github.com/mattthew/optine/internals/systemPrompts"
 )
 
-const (
+var ErrMalformedJSON = fmt.Errorf("The model sent a malformed JSON, skip tool calls and tell the model to retry its previous task.")
+
+var (
 	ollamaChatURL = "http://localhost:11434/api/chat"
 	vLLMChatURL   = "http://localhost:8000/v1/chat/completions"
 )
@@ -26,6 +29,28 @@ const (
 // A model that keeps asking for tools instead of answering gets cut off here
 // rather than looping forever.
 const maxTurns = 55
+
+// maxBadBodies bounds same-history retries when a provider answers with a
+// body that is not usable JSON. One bad body is usually a transient truncated
+// stream, so a couple of retries are worth it; past the budget the run aborts
+// instead of burning turns on confusion.
+const maxBadBodies = 5
+
+// malformedRetryNotice is the whole correction: short on purpose, so the
+// garbage body never enters history and costs zero future context.
+const malformedRetryNotice = "Your last reply wasn't usable JSON — re-issue your previous turn, exactly as before."
+
+// handleMalformedBody records one malformed provider body against budget.
+// A non-empty correction means the loop should append it as a user message
+// and continue; a non-nil abort means the budget is spent and the loop
+// should return it.
+func handleMalformedBody(badBodies *int, err error) (correction string, abort error) {
+	*badBodies++
+	if *badBodies > maxBadBodies {
+		return "", fmt.Errorf("provider sent %d malformed bodies in a row, aborting: %w", *badBodies, err)
+	}
+	return malformedRetryNotice, nil
+}
 
 var (
 	ErrMaxToolCalls     = errors.New("maximum tool calls exceeded without an answer")
@@ -87,14 +112,25 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		{Role: "user", Content: userMessage},
 	}
 
-	for range maxTurns {
+	badBodies := 0
+	for turn := range maxTurns {
 		var response dataTypes.NativeToolChatResponse
 
 		//the inference call
 		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(history, modelName), &response)
 		if err != nil {
+			if errors.Is(err, ErrMalformedJSON) {
+				correction, abort := handleMalformedBody(&badBodies, err)
+				if abort != nil {
+					return "", abort
+				}
+				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
+				history = append(history, &dataTypes.NativeTooltypeMessage{Role: "user", Content: correction})
+				continue
+			}
 			return "", err
 		}
+		badBodies = 0
 
 		reply := &response.Message
 
@@ -131,13 +167,23 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 		{Role: "user", Content: userMessage},
 	}
 
-	for range maxTurns {
+	badBodies := 0
+	for turn := range maxTurns {
 		var response dataTypes.VLLMNChatResponse
-
 		err := postJSON(ctx, vLLMChatURL, produceVLLMReqBody(history, modelName), &response)
 		if err != nil {
+			if errors.Is(err, ErrMalformedJSON) {
+				correction, abort := handleMalformedBody(&badBodies, err)
+				if abort != nil {
+					return "", abort
+				}
+				log.Printf("vllm turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
+				history = append(history, &dataTypes.VLLMTooltypeMessage{Role: "user", Content: correction})
+				continue
+			}
 			return "", err
 		}
+		badBodies = 0
 
 		if len(response.Choices) == 0 {
 			return "", ErrNoChoices
@@ -300,7 +346,8 @@ func postJSON(ctx context.Context, providerURL string, payload any, out any) err
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decoding provider response: %w", err)
+		return ErrMalformedJSON
+
 	}
 
 	return nil

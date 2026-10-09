@@ -114,9 +114,22 @@ func parseNonNativeResponse(content string) (*dataTypes.NonNativeLLMResponse, er
 	return &response, nil
 }
 
-// nonNativeAgentCall drives the envelope protocol: the model is handed the tool
-// list as prose and answers with a JSON object, and the harness executes the
-// tool and feeds the result back as TOOL_RESULT.
+// maxEnvelopeExcerpt caps the raw reply quoted back in a correction so one
+// huge garbage dump does not flood the context it is trying to rescue.
+const maxEnvelopeExcerpt = 500
+
+// correctionForBadEnvelope builds the retry instruction for a malformed
+// envelope reply. Unlike the native path the offending text is held here, so
+// it is quoted back (truncated) for the model to debug. Pure for testability.
+func correctionForBadEnvelope(raw string) string {
+	if runes := []rune(raw); len(runes) > maxEnvelopeExcerpt {
+		raw = string(runes[:maxEnvelopeExcerpt])
+	}
+	return fmt.Sprintf(
+		"Your last reply was not a valid tool-call envelope. Reply with exactly one valid JSON object and nothing else, no markdown fences. What you sent was:\n%s",
+		strings.TrimSpace(raw),
+	)
+}
 func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider string, modelName string, userMessage string) (string, error) {
 
 	var chat func(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, error)
@@ -144,8 +157,8 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 		},
 	}
 
-	for range maxTurns {
-
+	badBodies := 0
+	for turn := range maxTurns {
 		reply, err := chat(ctx, messages, modelName)
 		if err != nil {
 			return "", err
@@ -153,16 +166,21 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 
 		aiResponse, err := parseNonNativeResponse(reply.Content)
 		if err != nil {
-			return "", fmt.Errorf(
-				"invalid JSON response from %s: %w",
-				provider,
-				err,
-			)
+			_, abort := handleMalformedBody(&badBodies, fmt.Errorf("invalid JSON response from %s: %w", provider, err))
+			if abort != nil {
+				return "", abort
+			}
+			log.Printf("non-native turn %d: malformed envelope (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
+			messages = append(messages, &dataTypes.NonNativeMessage{
+				Role:    "user",
+				Content: correctionForBadEnvelope(reply.Content),
+			})
+			continue
 		}
+		badBodies = 0
 
 		switch aiResponse.Type {
 		case "final_answer":
-			log.Println("ending non native loop")
 			return aiResponse.Content, nil
 
 		case "tool_call":

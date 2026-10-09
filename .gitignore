@@ -2,3 +2,7 @@ optine
 whyInactive.md
 changes.md
 agentChanges.md
+# Sidecar file locks minted by edit_file's flock (e.g. .foo.txt.lock).
+.*.lock
+# Compiled scratch binaries from agent test runs.
+/testRuns/str_counter
