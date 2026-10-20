@@ -6,3 +6,4 @@ agentChanges.md
 .*.lock
 # Compiled scratch binaries from agent test runs.
 /testRuns/str_counter
+countStrings
