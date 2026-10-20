@@ -1,5 +1,8 @@
 package dataTypes
 
+// WebSearch teaches the two crawlers together with crawlerSection in
+// internals/systemPrompts and harnessTools.CrawlersAvailable; change one,
+// check the other two.
 var WebSearch = NativeTypeTool{
 	Type: "function",
 	Function: NativeTypeToolFunction{
@@ -8,7 +11,11 @@ var WebSearch = NativeTypeTool{
 			"asks about information that may have changed — current events, latest " +
 			"software versions, current prices, recent releases, current people or " +
 			"companies, or other time-sensitive facts. Do not use it for ordinary " +
-			"knowledge that doesn't require current information.",
+			"knowledge that doesn't require current information. " +
+			"Pass the crawler argument to pick the backend: tavily (hosted, best " +
+			"ranked quality, sends the query to a third party, API key stored in " +
+			"auth.json) or searxng (the user's own instance, private, no quota). " +
+			"The system prompt lists which crawlers are available this session.",
 		Parameters: NativeTypeParameters{
 			Type: "object",
 			Properties: map[string]NativeTypeProperties{
@@ -16,8 +23,15 @@ var WebSearch = NativeTypeTool{
 					Type:        "string",
 					Description: "The search query to run",
 				},
+				"crawler": {
+					Type: "string",
+					Description: "Required, no default. \"tavily\" runs a hosted search " +
+						"(best quality, third party, API key from auth.json); \"searxng\" " +
+						"runs the user's own instance (private, no quota). Pick searxng for " +
+						"private queries and whenever tavily reports quota or key problems.",
+				},
 			},
-			Required: []string{"query"},
+			Required: []string{"query", "crawler"},
 		},
 	},
 }

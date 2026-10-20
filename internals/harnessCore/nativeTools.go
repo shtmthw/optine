@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/mattthew/optine/internals/dataTypes"
+
 	"github.com/mattthew/optine/internals/harnessDispatch"
 	"github.com/mattthew/optine/internals/harnessMemory"
+	"github.com/mattthew/optine/internals/harnessTools"
 	"github.com/mattthew/optine/internals/systemPrompts"
 )
 
@@ -108,7 +110,7 @@ func withCasualMemory(base string) string {
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
 	history := []*dataTypes.NativeTooltypeMessage{
-		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now()))},
+		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now(), harnessTools.CrawlersAvailable()))},
 		{Role: "user", Content: userMessage},
 	}
 
@@ -163,7 +165,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
 	history := []*dataTypes.VLLMTooltypeMessage{
-		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now()))},
+		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now(), harnessTools.CrawlersAvailable()))},
 		{Role: "user", Content: userMessage},
 	}
 

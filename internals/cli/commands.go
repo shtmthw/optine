@@ -51,8 +51,20 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		}
 		return false
 
+	case "/connect":
+		if externalInput {
+			log.Println("not allowed to run /connect while in the agent interface")
+			return false
+		}
+		log.Println("starting /connect execution")
+		// the provider selection
+		if err := selectConnection(reader); err != nil {
+			log.Println("RunCommand error: ", err)
+		}
+		return false
+
 	case "/help", "/h":
-		log.Println("available commands: /local (pick provider and start), /funfact, /help, /quit")
+		log.Println("available commands: /local (pick provider and start), /connect (connect to supported api providers), /funfact, /help, /quit")
 		return false
 
 	case "/quit", "/exit", "/q":
