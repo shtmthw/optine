@@ -15,6 +15,7 @@ package harnessPermissions
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +49,22 @@ type Action struct {
 }
 
 var homeDir, _ = os.UserHomeDir()
-var cwd, _ = os.Getwd()
+
+// cwd is resolved once at startup and seeds the per-session approval maps in
+// the file policies. A failure is not fatal, but it must not pre-approve a
+// bogus path: see baseApprovedDirs.
+var cwd, cwdErr = os.Getwd()
+
+// baseApprovedDirs seeds the cwd entry the three file tools start from. When
+// os.Getwd fails we cannot name the working directory, so nothing is
+// pre-approved and every directory is ask-once: fail closed, not open.
+func baseApprovedDirs() map[string]bool {
+	if cwdErr != nil {
+		log.Println("working directory unavailable, no directory is pre-approved:", cwdErr)
+		return map[string]bool{}
+	}
+	return map[string]bool{cwd: true}
+}
 
 type spec struct {
 	Class    Class

@@ -54,8 +54,7 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 	if err != nil {
 		harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Decision: "deny", By: "policy", Reason: err.Error()})
 		return harnessPermissions.BashOutcome{
-			Text:         "denied: " + err.Error() + ". Rewrite it as simple commands (no $(...), variables, loops, subshells, heredocs).",
-			PolicyDenied: true,
+			Text: "denied: " + err.Error() + ". Rewrite it as simple commands (no $(...), variables, loops, subshells, heredocs).",
 		}
 	}
 
@@ -65,14 +64,14 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 	switch decision {
 	case harnessPermissions.Deny:
 		harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "deny", By: "policy", Reason: why})
-		return harnessPermissions.BashOutcome{Text: "denied: " + why, PolicyDenied: true}
+		return harnessPermissions.BashOutcome{Text: "denied: " + why}
 
 	case harnessPermissions.Ask:
 		by = "user"
 		ans, err := harnessPermissions.AskFunc("bash", reader, harnessPermissions.BashArgsMap(args), harnessPermissions.AskContent(actions, why))
 		if err != nil { // closed stdin, read error...: fail closed
 			harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "deny", By: "user", Reason: "approval prompt failed: " + err.Error()})
-			return harnessPermissions.BashOutcome{Text: "not run: the approval prompt failed: " + err.Error(), UserDenied: true}
+			return harnessPermissions.BashOutcome{Text: "not run: the approval prompt failed: " + err.Error()}
 		}
 		switch ans {
 		case harnessPermissions.Once:
@@ -89,7 +88,7 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 			}
 		default: // No, or any value we don't know
 			harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "deny", By: "user", Reason: why})
-			return harnessPermissions.BashOutcome{Text: "the user denied this command: " + why, UserDenied: true}
+			return harnessPermissions.BashOutcome{Text: "the user denied this command: " + why}
 		}
 	}
 

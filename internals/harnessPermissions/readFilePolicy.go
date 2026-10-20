@@ -9,9 +9,7 @@ import (
 	"strings"
 )
 
-var approvedReadDirs = map[string]bool{
-	cwd: true,
-}
+var approvedReadDirs = baseApprovedDirs()
 
 var ErrReadDenied = errors.New("read request has been denied by the user")
 

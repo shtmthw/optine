@@ -19,9 +19,7 @@ const MaxFileToolBytes = 256 * 1024
 // approvedEditDirs remembers directories the user approved with "always" for
 // edit_file this session. Separate from read's approvedDirs so reading a dir
 // never implies permission to change it.
-var approvedEditDirs = map[string]bool{
-	cwd: true,
-}
+var approvedEditDirs = baseApprovedDirs()
 
 var ErrEditDenied = errors.New("edit request has been denied by the user")
 

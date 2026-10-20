@@ -58,9 +58,7 @@ type BashArgs struct {
 
 // BashOutcome is what the agent loop gets back.
 type BashOutcome struct {
-	Text         string // goes back to the model as the tool result
-	PolicyDenied bool   // the command itself was rejected
-	UserDenied   bool   // the user said no, or the prompt failed (stronger stop signal)
+	Text string // goes back to the model as the tool result
 }
 
 func DefaultAuditPath() (string, error) {

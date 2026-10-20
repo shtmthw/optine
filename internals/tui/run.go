@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattthew/optine/internals/approval"
 )
 
 // Run launches the Bubble Tea front-end for the agent interface.
@@ -17,13 +18,25 @@ import (
 // handed back to the harness through the shared reader.
 func Run(provider string, modelName string, agent AgentFunc) error {
 	approvalCh := make(chan string)
-	reader := bufio.NewReader(newLineSource(approvalCh))
+
+	// done is closed when the TUI exits, so an approval prompt that is
+	// still blocked in the harness' ReadString sees EOF and fails closed
+	// instead of hanging the agent goroutine forever. Nothing is ever sent
+	// on it: closing it can never race a sender the way closing approvalCh
+	// (which sendApproval still pushes to) would.
+	doneCh := make(chan struct{})
+	reader := bufio.NewReader(newLineSource(approvalCh, doneCh))
 
 	program := tea.NewProgram(
 		New(provider, modelName, agent, reader, approvalCh),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+
+	// The harness asks for a human answer; route that to the program. This
+	// replaces an old substring match on the log text ("Allow?"), which
+	// welded three packages to one string inside a prompt message.
+	approval.Set(approvalListener{p: program})
 
 	// Mirror the old stdout/log behaviour inside the TUI without touching
 	// the harness loop itself.
@@ -35,14 +48,26 @@ func Run(provider string, modelName string, agent AgentFunc) error {
 	defer func() {
 		log.SetOutput(oldOutput)
 		log.SetFlags(oldFlags)
+		close(doneCh)
+		approval.Set(nil)
 	}()
 
 	_, err := program.Run()
 	return err
 }
 
-// tuiLogSink is an io.Writer that pushes log output into the Bubble Tea
-// program as messages instead of writing to stdout.
+// approvalListener is the TUI's side of internals/approval.
+type approvalListener struct {
+	p *tea.Program
+}
+
+func (a approvalListener) ApprovalRequested() {
+	a.p.Send(approvalRequestedMsg{})
+}
+
+// tuiLogSink forwards log lines into the Bubble Tea program as messages
+// instead of writing to stdout. It is only a display bridge: the approval
+// signal travels through internals/approval, not through this text.
 type tuiLogSink struct {
 	p *tea.Program
 }
@@ -54,31 +79,36 @@ func (s *tuiLogSink) Write(b []byte) (int, error) {
 		s.p.Send(logLineMsg{text: text})
 	}
 
-	// NOTE: the "Allow?" substring match is load-bearing — it is how the
-	// harness approval prompt (AskFunc) surfaces the TUI approval buttons.
-	// Do not "clean" it into a fancier protocol without updating askApproval.
-	if strings.Contains(string(b), "Allow?") {
-		s.p.Send(approvalRequestedMsg{})
-	}
-
 	return len(b), nil
 }
 
 // lineSource adapts a channel of user-typed lines into an io.Reader, so the
-// harness' bufio.Reader.ReadString calls can be answered from the TUI.
+// harness' bufio.Reader.ReadString calls can be answered from the TUI. The
+// done channel is closed on TUI exit; a read then returns EOF rather than
+// waiting for an answer that can never arrive.
 type lineSource struct {
 	ch   <-chan string
+	done <-chan struct{}
 	rest []byte
 }
 
-func newLineSource(ch <-chan string) *lineSource {
-	return &lineSource{ch: ch}
+func newLineSource(ch <-chan string, done <-chan struct{}) *lineSource {
+	return &lineSource{ch: ch, done: done}
 }
 
 func (l *lineSource) Read(p []byte) (int, error) {
 	if len(l.rest) == 0 {
-		line, ok := <-l.ch
-		if !ok {
+		var line string
+		var ok bool
+
+		select {
+		case line, ok = <-l.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+
+		case <-l.done:
+			// The TUI is gone; nobody will answer, so fail closed.
 			return 0, io.EOF
 		}
 
