@@ -182,6 +182,14 @@ func dispatchWebSearch(ctx context.Context, call *dataTypes.NativeLLMResponse) (
 		)
 	}
 
+	crawlerName, ok := call.Arguments["crawler"].(string)
+
+	if !ok {
+		return "", fmt.Errorf(
+			"web_search: missing crawler argument",
+		)
+	}
+
 	query, ok := rawQuery.(string)
 	if !ok {
 		return "", fmt.Errorf(
@@ -204,5 +212,5 @@ func dispatchWebSearch(ctx context.Context, call *dataTypes.NativeLLMResponse) (
 		)
 	}
 
-	return harnessTools.SearchWeb(ctx, query)
+	return harnessTools.SearchWeb(ctx, crawlerName, query)
 }

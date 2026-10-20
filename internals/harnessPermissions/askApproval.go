@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/mattthew/optine/internals/approval"
 )
 
 // Answer is the user's response to an approval prompt.
@@ -30,6 +32,10 @@ func AskFunc(tool string, reader *bufio.Reader, arguments map[string]any, conten
 	if strings.TrimSpace(content) != "" {
 		log.Printf("  description: %s", content)
 	}
+
+	// Tell whatever interface is in front of the user that a prompt is up.
+	// The TUI shows its approval buttons in response; the CLI ignores it.
+	approval.Notify()
 
 	log.Print("Allow? [y] once  [a] always (this tool/command)  [N] no: ")
 

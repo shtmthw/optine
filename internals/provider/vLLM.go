@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -125,9 +126,15 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 
 	switch resp.StatusCode {
 	case 400:
-		var vllmErr VLLMErrorResponse
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return false, fmt.Errorf("could not read vLLM error response: %w", err)
+		}
 
-		if err := json.NewDecoder(resp.Body).Decode(&vllmErr); err != nil {
+		log.Printf("vLLM 400 body: %s", raw)
+
+		var vllmErr VLLMErrorResponse
+		if err := json.Unmarshal(raw, &vllmErr); err != nil {
 			return false, fmt.Errorf("could not decode vLLM error response: %w", err)
 		}
 
@@ -147,6 +154,7 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 	case 422:
 		// malformed request
 		return false, fmt.Errorf("malformed smoke-test request: %s", bodySnippet(resp.Body))
+
 	case 200:
 		// deep check: did a structured tool call actually come back?
 		var r struct {

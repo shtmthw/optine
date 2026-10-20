@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/mattthew/optine/internals/dataTypes"
+
 	"github.com/mattthew/optine/internals/harnessDispatch"
 	"github.com/mattthew/optine/internals/harnessMemory"
+	"github.com/mattthew/optine/internals/harnessTools"
 	"github.com/mattthew/optine/internals/systemPrompts"
 )
 
@@ -108,7 +110,7 @@ func withCasualMemory(base string) string {
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
 	history := []*dataTypes.NativeTooltypeMessage{
-		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now()))},
+		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now(), harnessTools.CrawlersAvailable()))},
 		{Role: "user", Content: userMessage},
 	}
 
@@ -133,8 +135,6 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		badBodies = 0
 
 		reply := &response.Message
-
-		log.Println("inference reply on turn", turn, ":", reply)
 
 		// A tool-calling turn carries empty content, so tool calls have to be
 		// checked before treating empty content as an error.
@@ -165,7 +165,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
 	history := []*dataTypes.VLLMTooltypeMessage{
-		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now()))},
+		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now(), harnessTools.CrawlersAvailable()))},
 		{Role: "user", Content: userMessage},
 	}
 
@@ -204,8 +204,6 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 				return "", fmt.Errorf("tool call %q: %w", toolCall.Function.Name, err)
 			}
 		}
-
-		log.Println("inference reply on turn", turn, ":", reply)
 
 		// A tool-calling turn carries empty content, so tool calls have to be
 		// checked before treating empty content as an error.

@@ -58,17 +58,18 @@ type BashArgs struct {
 
 // BashOutcome is what the agent loop gets back.
 type BashOutcome struct {
-	Text         string // goes back to the model as the tool result
-	PolicyDenied bool   // the command itself was rejected
-	UserDenied   bool   // the user said no, or the prompt failed (stronger stop signal)
+	Text string // goes back to the model as the tool result
 }
 
+// DefaultAuditPath derives the JSONL audit file's location from AuthPath,
+// the single resolved config path (see optineConfigDir.go). An empty
+// AuthPath means the config dir never resolved at startup: fail closed
+// rather than writing into the working directory (filepath.Dir("") is ".").
 func DefaultAuditPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
+	if AuthPath == "" {
+		return "", fmt.Errorf("optine config dir unavailable, AuthPath was never resolved")
 	}
-	dir = filepath.Join(dir, "optine")
+	dir := filepath.Dir(AuthPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

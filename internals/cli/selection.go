@@ -20,6 +20,12 @@ var providers = []string{
 	"vLLM",
 }
 
+var connections = []string{
+	"Tavily",
+	"OpenAI",
+	"Anthropic",
+}
+
 func handleError(err error) error {
 	log.Println(err)
 	return err
@@ -45,9 +51,73 @@ func selectOption(reader *bufio.Reader, maxRange int, dataSlice []string) (strin
 	return "", fmt.Errorf("too many invalid attempts")
 }
 
+func handleAPIkeyInput(reader *bufio.Reader, selectedConnection string) error {
+
+	apiKey, err := reader.ReadString('\n')
+
+	if err != nil {
+		return err
+	}
+
+	apiKey = strings.TrimSpace(apiKey)
+
+	errSavingConnection := saveConnection(selectedConnection, apiKey)
+
+	if errSavingConnection != nil {
+		return errSavingConnection
+	}
+	return nil
+}
+
+// shows the use the range of available services they can connect to
+func selectConnection(reader *bufio.Reader) error {
+	log.Println("<connector list>")
+
+	for i, coonection := range connections {
+		log.Printf("%d. %s\n", i+1, coonection)
+	}
+
+	selectedConnection, err := selectOption(reader, 5, connections)
+
+	if err != nil {
+		return handleError(err)
+	}
+
+	switch selectedConnection {
+	case "Tavily":
+
+		log.Printf("You have selected Tavily, please input the API key.")
+
+		err := handleAPIkeyInput(reader, selectedConnection)
+		if err != nil {
+			return handleError(err)
+		}
+		log.Printf("Key set successfully.")
+
+	case "OpenAI":
+		log.Printf("You have selected OpenAI, please input the API key.")
+		err := handleAPIkeyInput(reader, selectedConnection)
+		if err != nil {
+			return handleError(err)
+		}
+		log.Printf("Key set successfully.")
+
+	case "Anthropic":
+		log.Printf("You have selected Anthropic, please input the API key.")
+		err := handleAPIkeyInput(reader, selectedConnection)
+		if err != nil {
+			return handleError(err)
+		}
+		log.Printf("Key set successfully.")
+
+	}
+
+	return nil
+}
+
 func selectProvider(reader *bufio.Reader) error {
 
-	log.Println("< provider list >")
+	log.Println("<provider list>")
 
 	for i, provider := range providers {
 		log.Printf("%d. %s\n", i+1, provider)
@@ -157,7 +227,7 @@ func selectProvider(reader *bufio.Reader) error {
 }
 
 func selectModel(modelSlice []string, reader *bufio.Reader) (string, error) {
-	log.Println("< model list >")
+	log.Println("<model list>")
 	for i, model := range modelSlice {
 		log.Printf("%d. %s\n", i+1, model)
 	}

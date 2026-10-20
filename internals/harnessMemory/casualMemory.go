@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-func casualMemoryPath() (string, error) {
+func CasualMemoryPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -25,12 +25,9 @@ func casualMemoryPath() (string, error) {
 // CasualMemoryPath returns the absolute path of the casual memory file,
 // creating the config dir if needed. Exported so prompts can name the exact
 // file the model is allowed to edit.
-func CasualMemoryPath() (string, error) {
-	return casualMemoryPath()
-}
 
 func loadCasualMemoryFile() (*os.File, error) {
-	path, err := casualMemoryPath()
+	path, err := CasualMemoryPath()
 	if err != nil {
 		return nil, err
 	}

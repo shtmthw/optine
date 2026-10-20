@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mattthew/optine/internals/dataTypes"
+	"github.com/mattthew/optine/internals/harnessTools"
 	"github.com/mattthew/optine/internals/systemPrompts"
 )
 
@@ -149,7 +150,7 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 	var messages = []*dataTypes.NonNativeMessage{
 		{
 			Role:    "system",
-			Content: withCasualMemory(systemPrompts.NonNativeToolSystemPrompt(time.Now(), maxTurns)),
+			Content: withCasualMemory(systemPrompts.NonNativeToolSystemPrompt(time.Now(), maxTurns, harnessTools.CrawlersAvailable())),
 		},
 		{
 			Role:    "user",
@@ -163,8 +164,6 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 		if err != nil {
 			return "", err
 		}
-
-		log.Println("inference reply on turn", turn, ":", reply)
 
 		aiResponse, err := parseNonNativeResponse(reply.Content)
 		if err != nil {

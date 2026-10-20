@@ -1,6 +1,7 @@
 package harnessTools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,56 +11,107 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mattthew/optine/internals/harnessPermissions"
 )
 
-var searxHTTPClient = &http.Client{
+var crawlerHTTPClient = &http.Client{
 	Timeout: 15 * time.Second,
 }
 
-type searxResult struct {
+// Shared by both crawlers: Tavily's results use the same title/url/content fields.
+type crawlerResult struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
 	Content string `json:"content"`
 }
 
-type searxResponse struct {
-	Results []*searxResult `json:"results"`
+type crawlerResponse struct {
+	Results []*crawlerResult `json:"results"`
 }
 
-func SearchWeb(ctx context.Context, query string) (string, error) {
-	baseURL := getSearXNGBaseURL()
-	endpoint, err := url.Parse(
-		strings.TrimRight(baseURL, "/") + "/search",
-	)
-	if err != nil {
+func SearchWeb(ctx context.Context, crawlerName string, query string) (string, error) {
+	const maxResults = 5
+
+	var req *http.Request
+
+	switch crawlerName {
+	case "tavily":
+		// get the api from the auth.json in the .config dir
+		apiKey, err := harnessPermissions.GetAPIKey(crawlerName)
+		if err != nil {
+			return "", fmt.Errorf("error occured while getting the API key, err: %w", err)
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"query":        query,
+			"search_depth": "basic",
+			"max_results":  maxResults,
+		})
+		if err != nil {
+			return "", fmt.Errorf(
+				"building tavily payload: %w",
+				err,
+			)
+		}
+
+		req, err = http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			"https://api.tavily.com/search",
+			bytes.NewReader(payload),
+		)
+		if err != nil {
+			return "", fmt.Errorf(
+				"building tavily request: %w",
+				err,
+			)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+	case "searxng":
+		endpoint, err := url.Parse(
+			strings.TrimRight(getSearXNGBaseURL(), "/") + "/search",
+		)
+		if err != nil {
+			return "", fmt.Errorf(
+				"building searxng URL: %w",
+				err,
+			)
+		}
+
+		params := endpoint.Query()
+		params.Set("q", query)
+		params.Set("format", "json")
+		endpoint.RawQuery = params.Encode()
+
+		req, err = http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			endpoint.String(),
+			nil,
+		)
+		if err != nil {
+			return "", fmt.Errorf(
+				"building searxng request: %w",
+				err,
+			)
+		}
+
+	default:
 		return "", fmt.Errorf(
-			"building searxng URL: %w",
-			err,
+			"unknown crawler %q (use \"tavily\" or \"searxng\")",
+			crawlerName,
 		)
 	}
-	params := endpoint.Query()
-	params.Set("q", query)
-	params.Set("format", "json")
 
-	endpoint.RawQuery = params.Encode()
-
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		endpoint.String(),
-		nil,
-	)
+	resp, err := crawlerHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf(
-			"building searxng request: %w",
-			err,
-		)
-	}
-
-	resp, err := searxHTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf(
-			"calling searxng: %w",
+			"calling %s: %w",
+			crawlerName,
 			err,
 		)
 	}
@@ -72,17 +124,19 @@ func SearchWeb(ctx context.Context, query string) (string, error) {
 		body, _ := io.ReadAll(resp.Body)
 
 		return "", fmt.Errorf(
-			"searxng returned HTTP %d: %s",
+			"%s returned HTTP %d: %s",
+			crawlerName,
 			resp.StatusCode,
 			strings.TrimSpace(string(body)),
 		)
 	}
 
-	var parsed searxResponse
+	var parsed crawlerResponse
 
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return "", fmt.Errorf(
-			"decoding searxng response: %w",
+			"decoding %s response: %w",
+			crawlerName,
 			err,
 		)
 	}
@@ -90,8 +144,6 @@ func SearchWeb(ctx context.Context, query string) (string, error) {
 	if len(parsed.Results) == 0 {
 		return "No search results were found.", nil
 	}
-
-	const maxResults = 5
 
 	if len(parsed.Results) > maxResults {
 		parsed.Results = parsed.Results[:maxResults]
@@ -131,4 +183,15 @@ func getSearXNGBaseURL() string {
 
 	// Default for a Docker Compose service named "searxng".
 	return "http://localhost:8080"
+}
+
+// the func that pushes the craw;ers into the whole pipeline, add on here if new crawlers or search engines get added.
+func CrawlersAvailable() []string {
+	crawlers := []string{"searxng"}
+
+	if _, err := harnessPermissions.GetAPIKey("tavily"); err == nil {
+		crawlers = append(crawlers, "tavily")
+	}
+
+	return crawlers
 }

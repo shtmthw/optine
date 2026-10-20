@@ -13,9 +13,7 @@ import (
 // approvedWriteDirs remembers directories the user approved with "always" for
 // write_file this session. Separate from read's approvedDirs and edit's
 // approvedEditDirs so one permission never implies another.
-var approvedWriteDirs = map[string]bool{
-	cwd: true,
-}
+var approvedWriteDirs = baseApprovedDirs()
 
 var ErrWriteDenied = errors.New("write request has been denied by the user")
 
