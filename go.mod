@@ -1,6 +1,6 @@
 module github.com/mattthew/optine
 
-go 1.26.6
+go 1.27.2
 
 require (
 	github.com/atotto/clipboard v0.1.4
