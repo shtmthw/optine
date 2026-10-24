@@ -25,7 +25,7 @@ models get the same harness.
 
 ## Requirements
 
-1. Go 1.26.6, pinned in go.mod
+1. Go 1.27.2, pinned in go.mod
 2. Linux or macOS for the bash tool
 3. Ollama running on localhost:11434, or vLLM on localhost:8000
 
