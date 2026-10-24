@@ -8,8 +8,5 @@ step5CleanUp.md
 .*.lock
 # Compiled scratch binaries from agent test runs.
 /testRuns/str_counter
-<<<<<<< HEAD
 countStrings
-=======
 /testRuns/tictactoe
->>>>>>> main
