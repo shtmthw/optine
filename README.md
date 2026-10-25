@@ -11,7 +11,8 @@ whether they support tool calling, and drops you into a terminal interface
 where the model can search the web, read files, edit files, create files
 and run bash commands. Models with native tool calling use it directly.
 Models without it fall back to a JSON envelope protocol, so small local
-models get the same harness.
+models get the same harness. Every conversation is a session: history is
+saved as you go, and /resume brings one back after a restart.
 
 ## Features
 
@@ -22,6 +23,7 @@ models get the same harness.
 5. A JSONL audit log recorded before any action executes
 6. Long term casual memory the model keeps in a plain file you can watch
 7. A terminal interface with clickable approval prompts, markdown output and copy shortcuts
+8. Sessional memory: conversation history saved under your user config directory and reloaded with /resume, including the directory the session started in
 
 ## Requirements
 
@@ -36,7 +38,22 @@ go build ./...
 ./optine
 ```
 
-Type /local to start. /help lists commands, /quit exits.
+Type /local to start. /help lists commands, /resume lists saved sessions,
+/quit exits.
+
+## Sessions
+
+Each conversation is a session with its own UID. The full history, in the
+provider's native format, is saved after every run under your user config
+directory, for example ~/.config/optine/sessions/ on Linux, along with the
+provider, model, directory and prompt token count. Sessions are written
+atomically, so quitting early cannot leave half a file behind.
+
+/resume lists saved sessions for the current provider and tool mode, and
+/resume last loads the newest one. A session remembers the directory it
+started in. If you resume it from a different directory, optine tells you
+and continues in the current one, because the tools always run where you
+launched optine.
 
 ## Approvals
 
@@ -60,26 +77,28 @@ is recorded before the action runs, and if the record cannot be written,
 the action does not run. Grants are exact, session scoped and gone when
 the process exits.
 
-The audit log and the memory notebook live in your user config directory
-under optine, for example ~/.config/optine/audit.jsonl and casualMemory.md
-on Linux.
+The audit log, the memory notebook and saved sessions live in your user
+config directory under optine, for example ~/.config/optine/audit.jsonl,
+casualMemory.md and sessions/ on Linux.
 
 ## Project layout
 
 1. internal/harnessCore, the provider agent loops, including recovery tests for malformed replies
-2. internal/harnessDispatch, tool call routing
-3. internal/harnessPermissions, the classifier, path policies, approvals and the audit log
-4. internal/harnessTools, tool execution
-5. internal/harnessMemory, the casual memory notebook
-6. internal/systemPrompts, prompt text
-7. internal/provider, server probing and capability checks
-8. internal/cli, provider and model pickers
-9. internal/tui, the terminal interface
+2. internal/harnessSession, session history, system prompt cache and disk persistence
+3. internal/harnessDispatch, tool call routing
+4. internal/harnessPermissions, the classifier, path policies, approvals and the audit log
+5. internal/harnessTools, tool execution
+6. internal/harnessMemory, the casual memory notebook
+7. internal/systemPrompts, prompt text
+8. internal/provider, server probing and capability checks
+9. internal/cli, provider and model pickers
+10. internal/tui, the terminal interface
 
 ## Status
 
-Skeleton stage, built solo by Matthew Baroi. Planned next: per session
-memory with undo and revert, transcript compaction, and a bash sandbox.
+Skeleton stage, built solo by Matthew Baroi. Sessions now survive restarts
+and can be resumed with /resume. Planned next: undo and revert for session
+changes, transcript compaction, and a bash sandbox.
 
 ## License
 
