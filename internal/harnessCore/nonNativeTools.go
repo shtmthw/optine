@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mattthew/optine/internals/dataTypes"
-	"github.com/mattthew/optine/internals/harnessTools"
-	"github.com/mattthew/optine/internals/systemPrompts"
+	"github.com/mattthew/optine/internal/dataTypes"
+	"github.com/mattthew/optine/internal/harnessTools"
+	"github.com/mattthew/optine/internal/systemPrompts"
 )
 
 func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string) dataTypes.NonNativeChatRequest {

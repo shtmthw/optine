@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattthew/optine/internals/approval"
+	"github.com/mattthew/optine/internal/approval"
 )
 
 // Run launches the Bubble Tea front-end for the agent interface.
@@ -56,7 +56,7 @@ func Run(provider string, modelName string, agent AgentFunc) error {
 	return err
 }
 
-// approvalListener is the TUI's side of internals/approval.
+// approvalListener is the TUI's side of internal/approval.
 type approvalListener struct {
 	p *tea.Program
 }
@@ -67,7 +67,7 @@ func (a approvalListener) ApprovalRequested() {
 
 // tuiLogSink forwards log lines into the Bubble Tea program as messages
 // instead of writing to stdout. It is only a display bridge: the approval
-// signal travels through internals/approval, not through this text.
+// signal travels through internal/approval, not through this text.
 type tuiLogSink struct {
 	p *tea.Program
 }

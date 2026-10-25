@@ -99,7 +99,7 @@ type logLineMsg struct {
 }
 
 // approvalRequestedMsg is sent when the harness asks for approval, routed
-// from harnessPermissions.AskFunc through internals/approval.
+// from harnessPermissions.AskFunc through internal/approval.
 type approvalRequestedMsg struct{}
 
 type tickMsg struct{}

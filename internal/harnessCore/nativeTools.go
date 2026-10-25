@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mattthew/optine/internals/dataTypes"
+	"github.com/mattthew/optine/internal/dataTypes"
 
-	"github.com/mattthew/optine/internals/harnessDispatch"
-	"github.com/mattthew/optine/internals/harnessMemory"
-	"github.com/mattthew/optine/internals/harnessTools"
-	"github.com/mattthew/optine/internals/systemPrompts"
+	"github.com/mattthew/optine/internal/harnessDispatch"
+	"github.com/mattthew/optine/internal/harnessMemory"
+	"github.com/mattthew/optine/internal/harnessTools"
+	"github.com/mattthew/optine/internal/systemPrompts"
 )
 
 var ErrMalformedJSON = fmt.Errorf("The model sent a malformed JSON, skip tool calls and tell the model to retry its previous task.")

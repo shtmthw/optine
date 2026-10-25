@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mattthew/optine/internals/dataTypes"
-	"github.com/mattthew/optine/internals/harnessPermissions"
+	"github.com/mattthew/optine/internal/dataTypes"
+	"github.com/mattthew/optine/internal/harnessPermissions"
 )
 
 // SaveConnection returns true if an existing connection was updated,

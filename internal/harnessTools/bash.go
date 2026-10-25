@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mattthew/optine/internals/harnessPermissions"
+	"github.com/mattthew/optine/internal/harnessPermissions"
 )
 
 var (

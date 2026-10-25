@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/mattthew/optine/internals/cli"
+	"github.com/mattthew/optine/internal/cli"
 )
 
 func main() {

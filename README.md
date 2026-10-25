@@ -66,15 +66,15 @@ on Linux.
 
 ## Project layout
 
-1. internals/harnessCore, the provider agent loops, including recovery tests for malformed replies
-2. internals/harnessDispatch, tool call routing
-3. internals/harnessPermissions, the classifier, path policies, approvals and the audit log
-4. internals/harnessTools, tool execution
-5. internals/harnessMemory, the casual memory notebook
-6. internals/systemPrompts, prompt text
-7. internals/provider, server probing and capability checks
-8. internals/cli, provider and model pickers
-9. internals/tui, the terminal interface
+1. internal/harnessCore, the provider agent loops, including recovery tests for malformed replies
+2. internal/harnessDispatch, tool call routing
+3. internal/harnessPermissions, the classifier, path policies, approvals and the audit log
+4. internal/harnessTools, tool execution
+5. internal/harnessMemory, the casual memory notebook
+6. internal/systemPrompts, prompt text
+7. internal/provider, server probing and capability checks
+8. internal/cli, provider and model pickers
+9. internal/tui, the terminal interface
 
 ## Status
 

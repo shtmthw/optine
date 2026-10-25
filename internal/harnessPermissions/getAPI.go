@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mattthew/optine/internals/dataTypes"
+	"github.com/mattthew/optine/internal/dataTypes"
 
 	"strings"
 )

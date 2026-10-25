@@ -7,7 +7,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/mattthew/optine/internals/approval"
+	"github.com/mattthew/optine/internal/approval"
 )
 
 // Answer is the user's response to an approval prompt.

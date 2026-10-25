@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mattthew/optine/internals/harnessPermissions"
+	"github.com/mattthew/optine/internal/harnessPermissions"
 )
 
 // MaxWritePreview caps the content excerpt in the deterministic result so a

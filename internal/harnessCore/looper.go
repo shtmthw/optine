@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/mattthew/optine/internals/dataTypes"
+	"github.com/mattthew/optine/internal/dataTypes"
 )
 
 func AgentLoop(userMessage string, agentConfig dataTypes.AgentConfig, reader *bufio.Reader) (string, error) {

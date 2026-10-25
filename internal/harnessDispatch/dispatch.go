@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mattthew/optine/internals/dataTypes"
-	"github.com/mattthew/optine/internals/harnessPermissions"
-	"github.com/mattthew/optine/internals/harnessTools"
+	"github.com/mattthew/optine/internal/dataTypes"
+	"github.com/mattthew/optine/internal/harnessPermissions"
+	"github.com/mattthew/optine/internal/harnessTools"
 )
 
 var ErrToolCallRejection = errors.New("the tool call request has been rejected")

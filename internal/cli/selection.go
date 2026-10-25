@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mattthew/optine/internals/dataTypes"
-	"github.com/mattthew/optine/internals/harnessCore"
-	"github.com/mattthew/optine/internals/provider"
-	"github.com/mattthew/optine/internals/tui"
+	"github.com/mattthew/optine/internal/dataTypes"
+	"github.com/mattthew/optine/internal/harnessCore"
+	"github.com/mattthew/optine/internal/provider"
+	"github.com/mattthew/optine/internal/tui"
 )
 
 var providers = []string{
