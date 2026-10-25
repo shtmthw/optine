@@ -39,14 +39,28 @@ var WebSearch = NativeTypeTool{
 var ReadFile = NativeTypeTool{
 	Type: "function",
 	Function: NativeTypeToolFunction{
-		Name:        "read_file",
-		Description: "Read the contents of a file from the local filesystem. Use this tool when you need to inspect a file's contents.",
+		Name: "read_file",
+		Description: "Read lines from a file on the local filesystem. Use it to inspect a file's contents. " +
+			"Returns at most 2000 lines per call. For a file longer than that, page through it with " +
+			"start_line/end_line: read_file(path, start_line=1, end_line=2000), then " +
+			"start_line=2001, end_line=4000, and so on. The reply names the next start_line to request " +
+			"and states how many of the requested lines were truncated when the range is over the limit.",
 		Parameters: NativeTypeParameters{
 			Type: "object",
 			Properties: map[string]NativeTypeProperties{
 				"path": {
 					Type:        "string",
 					Description: "The path to the file that should be read",
+				},
+				"start_line": {
+					Type:        "integer",
+					Description: "Optional, 1-based first line to return. Defaults to 1.",
+				},
+				"end_line": {
+					Type: "integer",
+					Description: "Optional, 1-based last line to return (inclusive). Omit it, or pass 0, " +
+						"for an open range capped at 2000 lines; both mean the same thing. A range " +
+						"longer than 2000 lines is clamped to 2000.",
 				},
 			},
 			Required: []string{"path"},

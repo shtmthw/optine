@@ -48,6 +48,13 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			return "User has rejected the tool call request.", ErrToolCallRejection
 		}
 	case "read_file":
+		// The line window is validated before the path is approved, so a
+		// malformed range fails without prompting the user.
+		startLine, endLine, err := harnessTools.ReadFileArgs(call.Arguments)
+		if err != nil {
+			log.Println(err)
+			return "", err
+		}
 
 		realPath, err := harnessPermissions.ReadFilePolicy(call.Arguments, reader)
 
@@ -55,7 +62,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			log.Println(err)
 			return "", err
 		}
-		return harnessTools.ReadFile(realPath)
+		return harnessTools.ReadFile(realPath, startLine, endLine)
 
 	case "edit_file":
 		// Policy resolves and approves the path (cwd pre-approved, other
