@@ -5,21 +5,22 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/mattthew/optine/internal/harnessPermissions"
 )
 
 func CasualMemoryPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
+	if harnessPermissions.AuthPath == "" {
+		return "", errors.New("optine config dir unavailable, AuthPath was never resolved")
+	}
+
+	dir := filepath.Dir(harnessPermissions.AuthPath)
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 
-	optineDir := filepath.Join(dir, "optine")
-
-	if err := os.MkdirAll(optineDir, 0o700); err != nil {
-		return "", err
-	}
-
-	return filepath.Join(optineDir, "casualMemory.md"), nil
+	return filepath.Join(dir, "casualMemory.md"), nil
 }
 
 // CasualMemoryPath returns the absolute path of the casual memory file,

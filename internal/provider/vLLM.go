@@ -15,7 +15,11 @@ import (
 // types and helpers
 type VLLMModelsResponse struct {
 	Data []struct {
-		ID string `json:"id"`
+		ID          string `json:"id"`
+		MaxModelLen int    `json:"max_model_len"`
+		ModelInfo   struct {
+			MaxModelLen int `json:"max_model_len"`
+		} `json:"model_info"`
 	} `json:"data"`
 }
 
@@ -68,6 +72,36 @@ func VLLMGetModelData() (string, error) {
 	modelName := data.Data[0].ID
 
 	return modelName, nil
+}
+
+// VLLMGetModelContextLength asks /v1/models for the loaded model's context
+// window. Zero means the server did not report one (the caller falls back).
+func VLLMGetModelContextLength() (int, error) {
+	resp, err := vllmClient.Get("http://localhost:8000/v1/models")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("unexpected status %d from /v1/models", resp.StatusCode)
+	}
+
+	var data VLLMModelsResponse
+
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return 0, err
+	}
+
+	if len(data.Data) == 0 {
+		return 0, fmt.Errorf("no model loaded")
+	}
+
+	if data.Data[0].MaxModelLen > 0 {
+		return data.Data[0].MaxModelLen, nil
+	}
+
+	return data.Data[0].ModelInfo.MaxModelLen, nil
 }
 
 // rules:

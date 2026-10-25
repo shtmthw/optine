@@ -64,7 +64,7 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		return false
 
 	case "/help", "/h":
-		log.Println("available commands: /local (pick provider and start), /connect (connect to supported api providers), /funfact, /help, /quit")
+		log.Println("available commands: /local (pick provider and start), /resume (pick session and resume work), /connect (connect to supported api providers), /funfact, /help, /quit")
 		return false
 
 	case "/quit", "/exit", "/q":

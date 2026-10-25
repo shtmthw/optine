@@ -14,6 +14,8 @@ type NonNativeChatRequest struct {
 
 type NonNativeChatResponse struct {
 	Message NonNativeMessage `json:"message"`
+	// PromptEvalCount is Ollama's prompt token count for this request.
+	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
 }
 
 // The OpenAI-compatible shape vLLM serves on /v1/chat/completions. The response
@@ -37,4 +39,7 @@ type VLLMNonNativeChatResponse struct {
 		Index   int              `json:"index"`
 		Message NonNativeMessage `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"usage"`
 }

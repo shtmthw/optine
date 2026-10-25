@@ -58,8 +58,11 @@ const (
 type Model struct {
 	provider  string
 	modelName string
+	workdir   string
 	agent     AgentFunc
 	reader    *bufio.Reader
+
+	sessionUID string
 
 	input    string
 	cursor   int // rune index into input
@@ -101,6 +104,12 @@ type logLineMsg struct {
 // approvalRequestedMsg is sent when the harness asks for approval, routed
 // from harnessPermissions.AskFunc through internal/approval.
 type approvalRequestedMsg struct{}
+
+// sessionChangedMsg carries the UID of the active session, set on the first
+// run and whenever /resume swaps sessions.
+type sessionChangedMsg struct {
+	uid string
+}
 
 type tickMsg struct{}
 
@@ -172,6 +181,7 @@ var (
 func New(
 	provider string,
 	modelName string,
+	workdir string,
 	agent AgentFunc,
 	reader *bufio.Reader,
 	approvalCh chan<- string,
@@ -179,6 +189,7 @@ func New(
 	return Model{
 		provider:   provider,
 		modelName:  modelName,
+		workdir:    workdir,
 		agent:      agent,
 		reader:     reader,
 		approvalCh: approvalCh,
@@ -265,6 +276,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingApproval = true
 		m.hovered = ""
 		m.scroll = 0 // make sure the prompt is on screen
+
+	case sessionChangedMsg:
+		m.sessionUID = msg.uid
 
 	case tickMsg:
 		if m.busy {
@@ -521,11 +535,69 @@ func centeredTitle(width int) string {
 	return titleStyle.Width(inner).Align(lipgloss.Center).Render(cutRunes(text, inner))
 }
 
+// centeredMeta renders the provider/model/session line and the working
+// directory line under the title. The session UID appears after the first run
+// and follows /resume.
+func centeredMeta(width int, providerName, modelName, sessionUID, workdir string) string {
+	lines := make([]string, 0, 2)
+
+	parts := make([]string, 0, 3)
+
+	if providerName != "" {
+		parts = append(parts, providerName)
+	}
+
+	if modelName != "" {
+		parts = append(parts, modelName)
+	}
+
+	if sessionUID != "" {
+		parts = append(parts, "sess "+sessionUID)
+	}
+
+	if len(parts) > 0 {
+		lines = append(lines, strings.Join(parts, " · "))
+	}
+
+	if workdir != "" {
+		lines = append(lines, "Directory: "+workdir)
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+
+	rendered := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		rendered = append(rendered, centeredStatus(width, line))
+	}
+
+	return strings.Join(rendered, "\n")
+}
+
+// centeredStatus centers one faint status line within the terminal width.
+func centeredStatus(width int, text string) string {
+	if width <= 0 {
+		return statusStyle.Render(text)
+	}
+
+	if width < 4 {
+		return statusStyle.Render(cutRunes(text, width))
+	}
+
+	inner := width - 2
+
+	return statusStyle.Width(inner).Align(lipgloss.Center).Render(cutRunes(text, inner))
+}
+
 func (m Model) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
 	b.WriteString(centeredTitle(m.width))
+	b.WriteString("\n")
+	b.WriteString(centeredMeta(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
 	b.WriteString("\n\n")
 
 	for _, message := range m.messages {

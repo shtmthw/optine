@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/mattthew/optine/internal/dataTypes"
 	"github.com/mattthew/optine/internal/harnessCore"
+	"github.com/mattthew/optine/internal/harnessSession"
 	"github.com/mattthew/optine/internal/provider"
 	"github.com/mattthew/optine/internal/tui"
 )
@@ -163,26 +165,7 @@ func selectProvider(reader *bufio.Reader) error {
 		log.Println("Tool calling available:", hasTools)
 		log.Println("Capablities: ", modelMetaData.Capabilities)
 
-		var agentConf = dataTypes.AgentConfig{
-			Provider:          "Ollama",
-			Model:             selectedModel,
-			NativeToolCalling: hasTools,
-		}
-
-		agent := func(_ context.Context, _ string, _ string, msg string, r *bufio.Reader) (string, error) {
-			if strings.HasPrefix(strings.TrimSpace(msg), "/") {
-				RunCommand(msg, true, r)
-				return "", nil
-			}
-
-			return harnessCore.AgentLoop(msg, agentConf, r)
-		}
-
-		ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, agent)
-
-		if ifaceErr != nil {
-			return handleError(ifaceErr)
-		}
+		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength())
 
 	case "vLLM":
 		modelName, err := provider.VLLMGetModelData()
@@ -202,28 +185,184 @@ func selectProvider(reader *bufio.Reader) error {
 
 		log.Println("Tool calling available:", nativeToolCall)
 
-		var agentConf = dataTypes.AgentConfig{
-			Provider:          "vLLM",
-			Model:             modelName,
-			NativeToolCalling: nativeToolCall,
+		contextLimit, err := provider.VLLMGetModelContextLength()
+		if err != nil {
+			log.Printf("vLLM context window probe failed: %v", err)
 		}
 
-		agent := func(_ context.Context, _ string, _ string, msg string, r *bufio.Reader) (string, error) {
-			if strings.HasPrefix(strings.TrimSpace(msg), "/") {
-				RunCommand(msg, true, r)
-				return "", nil
-			}
-
-			return harnessCore.AgentLoop(msg, agentConf, r)
-		}
-
-		if ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, agent); ifaceErr != nil {
-			return handleError(ifaceErr)
-		}
+		return runAgentSession("vLLM", modelName, nativeToolCall, contextLimit)
 	}
 
 	// wont ever reach
 	return nil
+}
+
+// runAgentSession owns the session for the whole TUI lifetime. One session,
+// one provider, one loop: history is never translated between formats.
+func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int) error {
+	// The agent's tools run against the process working directory, so that is
+	// the session's Directory: where reads, edits and commands will land.
+	CWD, wdErr := os.Getwd()
+	if wdErr != nil {
+		log.Printf("working directory unavailable: %v", wdErr)
+		CWD = "unknown"
+	}
+	sess := harnessSession.New(harnessSession.Config{
+		Provider:     providerName,
+		Model:        modelName,
+		Directory:    CWD,
+		Kind:         harnessSession.KindFor(providerName, nativeToolCalling),
+		ContextLimit: contextLimit,
+		MaxTurns:     harnessCore.MaxTurns,
+	})
+
+	agentConf := dataTypes.AgentConfig{
+		Provider:          providerName,
+		Model:             modelName,
+		NativeToolCalling: nativeToolCalling,
+	}
+
+	log.Printf("session %s started (%s, %s) in %s", sess.UID, providerName, modelName, sess.Directory)
+
+	agent := func(_ context.Context, _ string, _ string, msg string, r *bufio.Reader) (string, error) {
+		msg = strings.TrimSpace(msg)
+
+		if msg == "/resume" || strings.HasPrefix(msg, "/resume ") {
+			next, lines := resumeSession(sess, strings.TrimSpace(strings.TrimPrefix(msg, "/resume")))
+			if next != nil {
+				// if resumeable successfully the curr sess get overwritten with the fetched sess
+				sess = next
+			}
+
+			for _, line := range lines {
+				log.Println(line)
+			}
+
+			return "", nil
+		}
+
+		if strings.HasPrefix(msg, "/") {
+			RunCommand(msg, true, r)
+			return "", nil
+		}
+
+		return harnessCore.AgentLoop(sess, agentConf, msg, r)
+	}
+
+	if ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, CWD, agent); ifaceErr != nil {
+		return handleError(ifaceErr)
+	}
+
+	return nil
+}
+
+// resumeSession loads a saved session without blocking on input: the TUI can
+// only answer approval prompts while the harness is blocked on one, so a
+// selection prompt here would hang. Listing and picking are both plain text.
+func resumeSession(current *harnessSession.Session, arg string) (*harnessSession.Session, []string) {
+	metas, err := harnessSession.List()
+	if err != nil {
+		return nil, []string{"cannot read saved sessions: " + err.Error()}
+	}
+
+	eligible := make([]harnessSession.Meta, 0, len(metas))
+
+	for _, meta := range metas {
+		if meta.Kind != current.Kind || meta.Provider != current.Provider || meta.UID == current.UID || meta.Directory != current.Directory {
+			continue
+		}
+
+		eligible = append(eligible, meta)
+	}
+
+	if len(eligible) == 0 {
+		return nil, []string{"no other saved sessions for this provider and tool mode"}
+	}
+
+	if arg == "" {
+		lines := []string{"saved sessions (newest first):"}
+
+		for i, meta := range eligible {
+			line := fmt.Sprintf(
+				"  %d. %s  %s  %d messages  saved %s",
+				i+1, meta.UID, meta.Model, meta.Messages, meta.UpdatedAt.Format("2006-01-02 15:04"),
+			)
+
+			if meta.Directory != "" && meta.Directory != current.Directory {
+				line += "  [" + meta.Directory + "]"
+			}
+
+			lines = append(lines, line)
+		}
+
+		lines = append(lines, "load one with /resume <number|uid|last>")
+
+		return nil, lines
+	}
+
+	pick := func(uid string) (*harnessSession.Session, []string) {
+		next, err := harnessSession.Load(uid)
+		if err != nil {
+			return nil, []string{"cannot load session " + uid + ": " + err.Error()}
+		}
+
+		if err := next.Resumeable(current.Kind); err != nil {
+			return nil, []string{err.Error()}
+		}
+
+		lines := []string{fmt.Sprintf("resumed session %s — %d messages", next.UID, next.Len())}
+		if next.Model != current.Model {
+			lines = append(lines, fmt.Sprintf("model changed from %s to %s", current.Model, next.Model))
+		}
+
+		// Tools always run in the process working directory, so keep the
+		// session record truthful when it was forcefully started started somewhere else.
+		// as its already coded to not show sessions that does not match the CWD
+		switch {
+		case next.Directory == "":
+			next.Directory = current.Directory
+		case next.Directory != current.Directory:
+			lines = append(lines, fmt.Sprintf(
+				"session was started in %s; tools keep running in %s", next.Directory, current.Directory,
+			))
+			next.Directory = current.Directory
+		}
+
+		if harnessSession.OnActiveSession != nil {
+			harnessSession.OnActiveSession(next.UID)
+		}
+
+		return next, lines
+	}
+
+	if arg == "last" {
+		return pick(eligible[0].UID)
+	}
+
+	if n, err := strconv.Atoi(arg); err == nil {
+		if n < 1 || n > len(eligible) {
+			return nil, []string{fmt.Sprintf("no session %d (choose 1-%d, or /resume to list)", n, len(eligible))}
+		}
+
+		return pick(eligible[n-1].UID)
+	}
+
+	matches := make([]harnessSession.Meta, 0, 1)
+
+	for _, meta := range eligible {
+		if strings.HasPrefix(meta.UID, arg) {
+			matches = append(matches, meta)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return nil, []string{"no saved session matches " + arg}
+	case 1:
+		return pick(matches[0].UID)
+	default:
+		return nil, []string{fmt.Sprintf("%q matches %d sessions; use more characters", arg, len(matches))}
+	}
 }
 
 func selectModel(modelSlice []string, reader *bufio.Reader) (string, error) {

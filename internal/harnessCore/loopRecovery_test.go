@@ -10,7 +10,22 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/mattthew/optine/internal/harnessSession"
 )
+
+// testSession builds an in-memory session for the loops. Nothing here commits:
+// Commit only runs inside AgentLoop, so these tests stay off disk.
+func testSession(t *testing.T, kind harnessSession.Kind) *harnessSession.Session {
+	t.Helper()
+
+	return harnessSession.New(harnessSession.Config{
+		Provider: "Ollama",
+		Model:    "test-model",
+		Kind:     kind,
+		MaxTurns: MaxTurns,
+	})
+}
 
 // garbageServer serves 200 with an unparseable body on every hit and counts
 // the hits. It points one endpoint var at the server and restores it after.
@@ -32,7 +47,7 @@ func garbageServer(t *testing.T, urlVar *string) *int64 {
 func TestOllamaMalformedBodiesAbortAfterBudget(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	calls := garbageServer(t, &ollamaChatURL)
-	_, err := ollamaToolLoop(context.Background(), reader, "test-model", "hi")
+	_, err := ollamaToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OllamaNative))
 	if !errors.Is(err, ErrMalformedJSON) {
 		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 	}
@@ -44,7 +59,7 @@ func TestOllamaMalformedBodiesAbortAfterBudget(t *testing.T) {
 func TestVLLMMalformedBodiesAbortAfterBudget(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	calls := garbageServer(t, &vLLMChatURL)
-	_, err := vllmToolLoop(context.Background(), reader, "test-model", "hi")
+	_, err := vllmToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.VLLMNative))
 	if !errors.Is(err, ErrMalformedJSON) {
 		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 	}

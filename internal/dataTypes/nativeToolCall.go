@@ -12,11 +12,10 @@ type NativeTypeToolCall struct {
 }
 
 type NativeTooltypeMessage struct {
-	Role      string               `json:"role"`
-	Content   string               `json:"content"`
-	ToolCalls []NativeTypeToolCall `json:"tool_calls,omitempty"`
-	// Unused by Ollama, mandatory on OpenAI-compatible servers.
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content"`
+	ToolCalls  []NativeTypeToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
 }
 
 type NativeTypeTool struct {
@@ -52,6 +51,9 @@ type NativeToolChatRequest struct {
 
 type NativeToolChatResponse struct {
 	Message NativeTooltypeMessage `json:"message"`
+	// PromptEvalCount is how many tokens Ollama evaluated for the prompt. Kept
+	// as session telemetry (a future context-budget feature will need it).
+	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
 }
 
 // Everything below is the OpenAI-compatible shape that vLLM serves on
@@ -93,4 +95,7 @@ type VLLMNChatResponse struct {
 		Message      VLLMTooltypeMessage `json:"message"`
 		FinishReason string              `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"usage"`
 }

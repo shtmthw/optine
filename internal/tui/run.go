@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattthew/optine/internal/approval"
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 // Run launches the Bubble Tea front-end for the agent interface.
@@ -16,7 +17,7 @@ import (
 // log.Println (provider replies, tool call requests, approval prompts, ...)
 // is forwarded into the TUI, and approval answers typed by the user are
 // handed back to the harness through the shared reader.
-func Run(provider string, modelName string, agent AgentFunc) error {
+func Run(provider string, modelName string, workdir string, agent AgentFunc) error {
 	approvalCh := make(chan string)
 
 	// done is closed when the TUI exits, so an approval prompt that is
@@ -28,7 +29,7 @@ func Run(provider string, modelName string, agent AgentFunc) error {
 	reader := bufio.NewReader(newLineSource(approvalCh, doneCh))
 
 	program := tea.NewProgram(
-		New(provider, modelName, agent, reader, approvalCh),
+		New(provider, modelName, workdir, agent, reader, approvalCh),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
@@ -37,6 +38,11 @@ func Run(provider string, modelName string, agent AgentFunc) error {
 	// replaces an old substring match on the log text ("Allow?"), which
 	// welded three packages to one string inside a prompt message.
 	approval.Set(approvalListener{p: program})
+
+	// The active session's UID is shown under the title and follows /resume.
+	harnessSession.OnActiveSession = func(uid string) {
+		program.Send(sessionChangedMsg{uid: uid})
+	}
 
 	// Mirror the old stdout/log behaviour inside the TUI without touching
 	// the harness loop itself.
@@ -50,6 +56,7 @@ func Run(provider string, modelName string, agent AgentFunc) error {
 		log.SetFlags(oldFlags)
 		close(doneCh)
 		approval.Set(nil)
+		harnessSession.OnActiveSession = nil
 	}()
 
 	_, err := program.Run()

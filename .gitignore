@@ -9,3 +9,4 @@ step5CleanUp.md
 # Agent scratch workspace: compiled binaries, sample sources and build output.
 /testRuns/
 countStrings
+.kilo

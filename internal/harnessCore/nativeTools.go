@@ -16,9 +16,7 @@ import (
 	"github.com/mattthew/optine/internal/dataTypes"
 
 	"github.com/mattthew/optine/internal/harnessDispatch"
-	"github.com/mattthew/optine/internal/harnessMemory"
-	"github.com/mattthew/optine/internal/harnessTools"
-	"github.com/mattthew/optine/internal/systemPrompts"
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 var ErrMalformedJSON = fmt.Errorf("The model sent a malformed JSON, skip tool calls and tell the model to retry its previous task.")
@@ -29,8 +27,9 @@ var (
 )
 
 // A model that keeps asking for tools instead of answering gets cut off here
-// rather than looping forever.
-const maxTurns = 55
+// rather than looping forever. Exported because sessions build the envelope
+// prompt from the same budget.
+const MaxTurns = 55
 
 // maxBadBodies bounds same-history retries when a provider answers with a
 // body that is not usable JSON. One bad body is usually a transient truncated
@@ -71,34 +70,17 @@ var providerHTTPClient = &http.Client{
 // nativeToolAgentCall runs the agent loop on the chosen provider. Picking a
 // provider is also picking a model and an inference server, so a whole run
 // stays on one of the two loops below.
-func nativeToolAgentCall(ctx context.Context, reader *bufio.Reader, provider string, modelName string, userMessage string) (string, error) {
+func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
 	switch provider {
 	case "Ollama":
-		return ollamaToolLoop(ctx, reader, modelName, userMessage)
+		return ollamaToolLoop(ctx, reader, modelName, sess)
 
 	case "vLLM":
-		return vllmToolLoop(ctx, reader, modelName, userMessage)
+		return vllmToolLoop(ctx, reader, modelName, sess)
 
 	default:
 		return "", fmt.Errorf("unsupported provider %q", provider)
 	}
-}
-
-// withCasualMemory appends the user's long-term memory to base, once per
-// agent-loop trigger at history construction. Best-effort: any failure logs
-// and returns base unchanged so a memory hiccup never aborts the run.
-func withCasualMemory(base string) string {
-	memoryPath, err := harnessMemory.CasualMemoryPath()
-	if err != nil {
-		log.Printf("casual memory path unavailable: %v", err)
-		return base
-	}
-	memoryData, err := harnessMemory.ReadCasualMemoryFile()
-	if err != nil {
-		log.Printf("casual memory unavailable: %v", err)
-		return base
-	}
-	return systemPrompts.WithCasualMemory(base, memoryPath, memoryData)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,18 +90,15 @@ func withCasualMemory(base string) string {
 // replayed exactly as the server sent it and never translated between formats.
 // ---------------------------------------------------------------------------
 
-func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
-	history := []*dataTypes.NativeTooltypeMessage{
-		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now(), harnessTools.CrawlersAvailable()))},
-		{Role: "user", Content: userMessage},
-	}
+func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
+	history := sess.Ollama()
 
 	badBodies := 0
-	for turn := range maxTurns {
+	for turn := range MaxTurns {
 		var response dataTypes.NativeToolChatResponse
 
 		//the inference call
-		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(history, modelName), &response)
+		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -127,12 +106,13 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 					return "", abort
 				}
 				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
-				history = append(history, &dataTypes.NativeTooltypeMessage{Role: "user", Content: correction})
+				*history = append(*history, &dataTypes.NativeTooltypeMessage{Role: "user", Content: correction})
 				continue
 			}
 			return "", err
 		}
 		badBodies = 0
+		sess.RecordPromptTokens(response.PromptEvalCount)
 
 		reply := &response.Message
 
@@ -143,36 +123,47 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				return "", ErrEmptyFinalAnswer
 			}
 
+			// The answer is part of the conversation too: append it before
+			// returning, otherwise the session file would only ever hold the
+			// user's side of the transcript.
+			*history = append(*history, reply)
+
 			return reply.Content, nil
 		}
 
-		// Keep the assistant's tool-call message in history, as sent.
-		history = append(history, reply)
+		// Run every tool before touching history, then append the assistant
+		// message and all results as one block. No exit path can leave a
+		// tool-call message without its tool results.
+		results := make([]string, len(reply.ToolCalls))
 
-		for _, toolCall := range reply.ToolCalls {
-			result := runTool(ctx, reader, toolCall.Function.Name, toolCall.Function.Arguments)
+		for i, toolCall := range reply.ToolCalls {
+			results[i] = runTool(ctx, reader, toolCall.Function.Name, toolCall.Function.Arguments)
+		}
 
-			history = append(history, &dataTypes.NativeTooltypeMessage{
+		block := make([]*dataTypes.NativeTooltypeMessage, 0, 1+len(reply.ToolCalls))
+		block = append(block, reply)
+
+		for i, toolCall := range reply.ToolCalls {
+			block = append(block, &dataTypes.NativeTooltypeMessage{
 				Role:       "tool",
 				ToolCallID: toolCall.ID,
-				Content:    result,
+				Content:    results[i],
 			})
 		}
+
+		*history = append(*history, block...)
 	}
 
 	return "", ErrMaxToolCalls
 }
 
-func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, userMessage string) (string, error) {
-	history := []*dataTypes.VLLMTooltypeMessage{
-		{Role: "system", Content: withCasualMemory(systemPrompts.NativeToolSystemPrompt(time.Now(), harnessTools.CrawlersAvailable()))},
-		{Role: "user", Content: userMessage},
-	}
+func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
+	history := sess.VLLM()
 
 	badBodies := 0
-	for turn := range maxTurns {
+	for turn := range MaxTurns {
 		var response dataTypes.VLLMNChatResponse
-		err := postJSON(ctx, vLLMChatURL, produceVLLMReqBody(history, modelName), &response)
+		err := postJSON(ctx, vLLMChatURL, produceVLLMReqBody(*history, modelName), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -180,12 +171,13 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 					return "", abort
 				}
 				log.Printf("vllm turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
-				history = append(history, &dataTypes.VLLMTooltypeMessage{Role: "user", Content: correction})
+				*history = append(*history, &dataTypes.VLLMTooltypeMessage{Role: "user", Content: correction})
 				continue
 			}
 			return "", err
 		}
 		badBodies = 0
+		sess.RecordPromptTokens(response.Usage.PromptTokens)
 
 		if len(response.Choices) == 0 {
 			return "", ErrNoChoices
@@ -212,21 +204,35 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, u
 				return "", ErrEmptyFinalAnswer
 			}
 
+			// The answer is part of the conversation too: append it before
+			// returning, otherwise the session file would only ever hold the
+			// user's side of the transcript.
+			*history = append(*history, reply)
+
 			return reply.Content, nil
 		}
 
-		// Keep the assistant's tool-call message in history, as sent.
-		history = append(history, reply)
+		// Run every tool before touching history, then append the assistant
+		// message and all results as one block. No exit path can leave a
+		// tool-call message without its tool results.
+		results := make([]string, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
-			result := runTool(ctx, reader, toolCall.Function.Name, arguments[i])
+			results[i] = runTool(ctx, reader, toolCall.Function.Name, arguments[i])
+		}
 
-			history = append(history, &dataTypes.VLLMTooltypeMessage{
+		block := make([]*dataTypes.VLLMTooltypeMessage, 0, 1+len(reply.ToolCalls))
+		block = append(block, reply)
+
+		for i, toolCall := range reply.ToolCalls {
+			block = append(block, &dataTypes.VLLMTooltypeMessage{
 				Role:       "tool",
 				ToolCallID: toolCall.ID,
-				Content:    result,
+				Content:    results[i],
 			})
 		}
+
+		*history = append(*history, block...)
 	}
 
 	return "", ErrMaxToolCalls

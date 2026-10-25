@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,24 @@ type OllamaShowResponse struct {
 	Template     string         `json:"template"`
 	Parser       string         `json:"parser"`
 	ModelInfo    map[string]any `json:"model_info"`
+}
+
+// ContextLength reads the model's configured context window out of
+// /api/show's model_info map. The key is prefixed with the architecture
+// (e.g. "llama.context_length"), so the suffix is what is matched. Zero means
+// the server did not report one.
+func (r OllamaShowResponse) ContextLength() int {
+	for key, value := range r.ModelInfo {
+		if !strings.HasSuffix(key, ".context_length") {
+			continue
+		}
+
+		if n, ok := value.(float64); ok {
+			return int(n)
+		}
+	}
+
+	return 0
 }
 
 var ollamaClient = &http.Client{

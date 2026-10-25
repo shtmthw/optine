@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/mattthew/optine/internal/dataTypes"
-	"github.com/mattthew/optine/internal/harnessTools"
-	"github.com/mattthew/optine/internal/systemPrompts"
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string) dataTypes.NonNativeChatRequest {
@@ -49,30 +47,30 @@ func produceVLLMNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelNa
 	return requestBody
 }
 
-func ollamaNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, error) {
+func ollamaNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.NonNativeChatResponse
 
 	if err := postJSON(ctx, ollamaChatURL, produceNonNativeReqBody(messages, modelName), &result); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return &result.Message, nil
+	return &result.Message, result.PromptEvalCount, nil
 }
 
-func vllmNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, error) {
+func vllmNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.VLLMNonNativeChatResponse
 
 	if err := postJSON(ctx, vLLMChatURL, produceVLLMNonNativeReqBody(messages, modelName), &result); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if len(result.Choices) == 0 {
-		return nil, ErrNoChoices
+		return nil, 0, ErrNoChoices
 	}
 
-	return &result.Choices[0].Message, nil
+	return &result.Choices[0].Message, result.Usage.PromptTokens, nil
 }
 
 // parseNonNativeResponse pulls the JSON envelope out of a reply. The fence
@@ -131,9 +129,9 @@ func correctionForBadEnvelope(raw string) string {
 		strings.TrimSpace(raw),
 	)
 }
-func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider string, modelName string, userMessage string) (string, error) {
+func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
 
-	var chat func(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, error)
+	var chat func(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, int, error)
 
 	switch provider {
 
@@ -147,23 +145,15 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 		return "", fmt.Errorf("unsupported provider %q", provider)
 	}
 
-	var messages = []*dataTypes.NonNativeMessage{
-		{
-			Role:    "system",
-			Content: withCasualMemory(systemPrompts.NonNativeToolSystemPrompt(time.Now(), maxTurns, harnessTools.CrawlersAvailable())),
-		},
-		{
-			Role:    "user",
-			Content: userMessage,
-		},
-	}
+	history := sess.Envelope()
 
 	badBodies := 0
-	for turn := range maxTurns {
-		reply, err := chat(ctx, messages, modelName)
+	for turn := range MaxTurns {
+		reply, promptTokens, err := chat(ctx, *history, modelName)
 		if err != nil {
 			return "", err
 		}
+		sess.RecordPromptTokens(promptTokens)
 
 		aiResponse, err := parseNonNativeResponse(reply.Content)
 		if err != nil {
@@ -172,7 +162,7 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 				return "", abort
 			}
 			log.Printf("non-native turn %d: malformed envelope (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
-			messages = append(messages, &dataTypes.NonNativeMessage{
+			*history = append(*history, &dataTypes.NonNativeMessage{
 				Role:    "user",
 				Content: correctionForBadEnvelope(reply.Content),
 			})
@@ -182,28 +172,33 @@ func nonNativeAgentCall(ctx context.Context, reader *bufio.Reader, provider stri
 
 		switch aiResponse.Type {
 		case "final_answer":
+			// Persist the assistant's final envelope as sent; a session that
+			// only stores user turns is not a transcript.
+			*history = append(*history, reply)
+
 			return aiResponse.Content, nil
 
 		case "tool_call":
 			result := runTool(ctx, reader, aiResponse.Tool, aiResponse.Arguments)
 
-			// Keep the assistant's JSON tool request in the conversation.
-			messages = append(messages, reply)
-
-			// Feed the actual tool result back to the model.
-			messages = append(messages, &dataTypes.NonNativeMessage{
-				Role: "user",
-				Content: fmt.Sprintf(
-					"TOOL_RESULT\n"+
-						"tool: %s\n\n"+
-						"result:\n%s\n\n"+
-						"Use this result to continue solving the user's request. "+
-						"If you have enough information, return a final_answer JSON object. "+
-						"If you need to run a tool, return another tool_call JSON object.",
-					aiResponse.Tool,
-					result,
-				),
-			})
+			// Keep the assistant's JSON tool request and the actual tool
+			// result together: one append, so no exit path can separate them.
+			*history = append(*history,
+				reply,
+				&dataTypes.NonNativeMessage{
+					Role: "user",
+					Content: fmt.Sprintf(
+						"TOOL_RESULT\n"+
+							"tool: %s\n\n"+
+							"result:\n%s\n\n"+
+							"Use this result to continue solving the user's request. "+
+							"If you have enough information, return a final_answer JSON object. "+
+							"If you need to run a tool, return another tool_call JSON object.",
+						aiResponse.Tool,
+						result,
+					),
+				},
+			)
 
 		default:
 			// parseNonNativeResponse already rejects unknown types.

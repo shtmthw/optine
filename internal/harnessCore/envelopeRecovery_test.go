@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 // TestNonNativeMalformedEnvelopeRecovers proves the full correction loop:
@@ -32,7 +34,7 @@ func TestNonNativeMalformedEnvelopeRecovers(t *testing.T) {
 	t.Cleanup(func() { ollamaChatURL = old })
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	out, err := nonNativeAgentCall(context.Background(), reader, "Ollama", "test-model", "hi")
+	out, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
 	if err != nil {
 		t.Fatalf("want recovery with answer, got error: %v", err)
 	}
@@ -59,7 +61,7 @@ func TestNonNativeMalformedEnvelopeAbortsAfterBudget(t *testing.T) {
 	t.Cleanup(func() { ollamaChatURL = old })
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	_, err := nonNativeAgentCall(context.Background(), reader, "Ollama", "test-model", "hi")
+	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
 	if err == nil || !strings.Contains(err.Error(), "Ollama") {
 		t.Fatalf("want abort naming the provider, got: %v", err)
 	}
