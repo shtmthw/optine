@@ -31,6 +31,21 @@ var (
 // prompt from the same budget.
 const MaxTurns = 55
 
+// baseTurns is the starting turn budget. Every tool round and every malformed
+// retry grants one more turn, up to MaxTurns, so a long tool chain gets room
+// without letting a stuck model loop forever.
+const baseTurns = 10
+
+// extendTurns grants one turn of headroom while keeping MaxTurns as the hard
+// ceiling.
+func extendTurns(turns int) int {
+	if turns < MaxTurns {
+		return turns + 1
+	}
+
+	return turns
+}
+
 // maxBadBodies bounds same-history retries when a provider answers with a
 // body that is not usable JSON. One bad body is usually a transient truncated
 // stream, so a couple of retries are worth it; past the budget the run aborts
@@ -54,13 +69,13 @@ func handleMalformedBody(badBodies *int, err error) (correction string, abort er
 }
 
 var (
-	ErrMaxToolCalls     = errors.New("maximum tool calls exceeded without an answer")
-	ErrEmptyFinalAnswer = errors.New("provider returned an empty final answer")
-	ErrNoChoices        = errors.New("vLLM returned no choices")
+	ErrMaxInferenceCalls = errors.New("maximum inference calls exceeded without an answer")
+	ErrEmptyFinalAnswer  = errors.New("provider returned an empty final answer")
+	ErrNoChoices         = errors.New("vLLM returned no choices")
 )
 
 var providerHTTPClient = &http.Client{
-	Timeout: 320 * time.Second,
+	Timeout: 999 * time.Second,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,9 +107,9 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
 	history := sess.Ollama()
-
+	turns := baseTurns
 	badBodies := 0
-	for turn := range MaxTurns {
+	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
 
 		//the inference call
@@ -105,6 +120,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				if abort != nil {
 					return "", abort
 				}
+				turns = extendTurns(turns)
 				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 				*history = append(*history, &dataTypes.NativeTooltypeMessage{Role: "user", Content: correction})
 				continue
@@ -127,7 +143,6 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			// returning, otherwise the session file would only ever hold the
 			// user's side of the transcript.
 			*history = append(*history, reply)
-
 			return reply.Content, nil
 		}
 
@@ -150,18 +165,19 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				Content:    results[i],
 			})
 		}
-
+		turns = extendTurns(turns)
 		*history = append(*history, block...)
 	}
 
-	return "", ErrMaxToolCalls
+	return "", ErrMaxInferenceCalls
 }
 
 func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
 	history := sess.VLLM()
 
+	turns := baseTurns
 	badBodies := 0
-	for turn := range MaxTurns {
+	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.VLLMNChatResponse
 		err := postJSON(ctx, vLLMChatURL, produceVLLMReqBody(*history, modelName), &response)
 		if err != nil {
@@ -170,6 +186,7 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 				if abort != nil {
 					return "", abort
 				}
+				turns = extendTurns(turns)
 				log.Printf("vllm turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 				*history = append(*history, &dataTypes.VLLMTooltypeMessage{Role: "user", Content: correction})
 				continue
@@ -232,10 +249,11 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 			})
 		}
 
+		turns = extendTurns(turns)
 		*history = append(*history, block...)
 	}
 
-	return "", ErrMaxToolCalls
+	return "", ErrMaxInferenceCalls
 }
 
 // nativeTools is the one list of tools the agent advertises, so the request

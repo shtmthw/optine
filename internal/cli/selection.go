@@ -165,7 +165,14 @@ func selectProvider(reader *bufio.Reader) error {
 		log.Println("Tool calling available:", hasTools)
 		log.Println("Capablities: ", modelMetaData.Capabilities)
 
-		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength())
+		if err := withSpinner(fmt.Sprintf("Loading %s into Ollama", selectedModel), func() error {
+			return provider.OllamaLoadModel(selectedModel)
+		}); err != nil {
+			return fmt.Errorf("loading model %q in Ollama: %w", selectedModel, err)
+		}
+
+		log.Printf("Model %s loaded", selectedModel)
+		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel))
 
 	case "vLLM":
 		modelName, err := provider.VLLMGetModelData()

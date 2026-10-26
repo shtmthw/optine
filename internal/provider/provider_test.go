@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -103,8 +105,8 @@ func TestOllamaGetModelMetaData(t *testing.T) {
 	if len(meta.Capabilities) != 2 || meta.Capabilities[0] != "tools" {
 		t.Fatalf("unexpected capabilities: %v", meta.Capabilities)
 	}
-	if got := meta.ContextLength(); got != 8192 {
-		t.Fatalf("ContextLength = %d, want 8192", got)
+	if got := meta.ModelInfo["llama.context_length"]; got != float64(8192) {
+		t.Fatalf("model_info context_length = %v, want 8192", got)
 	}
 }
 
@@ -118,22 +120,109 @@ func TestOllamaGetModelMetaDataNonOK(t *testing.T) {
 	}
 }
 
-// ContextLength reads any *.context_length key and reports 0 when absent.
+// ContextLength reads /api/ps's context_length for the exact running model
+// name. A missing model or an /api/ps failure falls back to zero.
 func TestOllamaContextLength(t *testing.T) {
 	cases := []struct {
-		name string
-		info map[string]any
-		want int
+		name   string
+		model  string
+		status int
+		body   string
+		want   int
 	}{
-		{"architecture prefix", map[string]any{"llama.context_length": float64(4096)}, 4096},
-		{"absent", map[string]any{"other": float64(1)}, 0},
-		{"nil map", nil, 0},
+		{"matching model", "llama3:8b", http.StatusOK, `{"models":[{"name":"llama3:8b","context_length":8192}]}`, 8192},
+		{"different model", "llama3:8b", http.StatusOK, `{"models":[{"name":"other:7b","context_length":4096}]}`, 0},
+		{"empty list", "llama3:8b", http.StatusOK, `{"models":[]}`, 0},
+		{"server error", "llama3:8b", http.StatusInternalServerError, "boom", 0},
+		{"malformed body", "llama3:8b", http.StatusOK, "not json", 0},
 	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := OllamaShowResponse{ModelInfo: tc.info}.ContextLength()
+			stubProvider(t, &ollamaClient, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/ps" {
+					t.Errorf("unexpected path %q", r.URL.Path)
+				}
+
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			})
+
+			got := (OllamaShowResponse{}).ContextLength(tc.model)
 			if got != tc.want {
 				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOllamaLoadModel(t *testing.T) {
+	stubProvider(t, &ollamaModelLoader, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/api/chat" {
+			t.Errorf("path = %q, want /api/chat", r.URL.Path)
+		}
+
+		var payload struct {
+			Model     string `json:"model"`
+			Messages  []any  `json:"messages"`
+			Stream    bool   `json:"stream"`
+			KeepAlive string `json:"keep_alive"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+
+		if payload.Model != "llama3:8b" {
+			t.Errorf("model = %q, want llama3:8b", payload.Model)
+		}
+		if len(payload.Messages) != 0 {
+			t.Errorf("messages = %d, want 0", len(payload.Messages))
+		}
+		if payload.Stream {
+			t.Error("stream = true, want false")
+		}
+		if payload.KeepAlive != "15m" {
+			t.Errorf("keep_alive = %q, want 15m", payload.KeepAlive)
+		}
+
+		fmt.Fprint(w, `{"done_reason":"load"}`)
+	})
+
+	if err := OllamaLoadModel("llama3:8b"); err != nil {
+		t.Fatalf("OllamaLoadModel: %v", err)
+	}
+}
+
+func TestOllamaLoadModelErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"json error status", http.StatusInternalServerError, `{"error":"model not found"}`, "model not found"},
+		{"error field on success", http.StatusOK, `{"error":"failed to load model"}`, "failed to load model"},
+		{"non-json error status", http.StatusBadGateway, "upstream unavailable", "upstream unavailable"},
+		{"malformed success body", http.StatusOK, "not json", "decode ollama load response"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubProvider(t, &ollamaModelLoader, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			})
+
+			err := OllamaLoadModel("llama3:8b")
+			if err == nil {
+				t.Fatal("want error, got nil")
+			}
+			if tc.want != "" && !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want it to contain %q", err, tc.want)
 			}
 		})
 	}

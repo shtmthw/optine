@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -28,18 +29,123 @@ type OllamaShowResponse struct {
 	ModelInfo    map[string]any `json:"model_info"`
 }
 
-// ContextLength reads the model's configured context window out of
-// /api/show's model_info map. The key is prefixed with the architecture
-// (e.g. "llama.context_length"), so the suffix is what is matched. Zero means
-// the server did not report one.
-func (r OllamaShowResponse) ContextLength() int {
-	for key, value := range r.ModelInfo {
-		if !strings.HasSuffix(key, ".context_length") {
-			continue
+type RunningModel struct {
+	Name          string `json:"name"`
+	ContextLength int    `json:"context_length"`
+}
+
+type PSResponse struct {
+	Models []RunningModel `json:"models"`
+}
+
+var ollamaModelLoader = &http.Client{
+	Timeout: 500 * time.Second,
+}
+
+// OllamaLoadModel loads the selected model into memory with an empty chat
+// request. Ollama returns only after the model is ready, so this can block for
+// minutes; the CLI wraps the call in a spinner.
+func OllamaLoadModel(selectedModel string) error {
+	payload := map[string]any{
+		"model":      selectedModel,
+		"messages":   []any{},
+		"stream":     false,
+		"keep_alive": "15m",
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode ollama load request: %w", err)
+	}
+
+	resp, err := ollamaModelLoader.Post(
+		"http://localhost:11434/api/chat",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("ollama load request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read ollama load response: %w", err)
+	}
+
+	var result struct {
+		Error      string `json:"error"`
+		DoneReason string `json:"done_reason"`
+	}
+	decodeErr := json.Unmarshal(raw, &result)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if result.Error != "" {
+			return fmt.Errorf("ollama returned %s: %s", resp.Status, result.Error)
 		}
 
-		if n, ok := value.(float64); ok {
-			return int(n)
+		return fmt.Errorf("ollama returned %s: %s", resp.Status, ollamaResponseSnippet(raw))
+	}
+
+	if decodeErr != nil {
+		return fmt.Errorf("decode ollama load response: %w", decodeErr)
+	}
+
+	if result.Error != "" {
+		return fmt.Errorf("ollama: %s", result.Error)
+	}
+
+	return nil
+}
+
+// ollamaResponseSnippet keeps a truncated, readable copy of an unexpected
+// response body for the CLI error line.
+func ollamaResponseSnippet(raw []byte) string {
+	const limit = 512
+
+	snippet := strings.TrimSpace(string(raw))
+	if snippet == "" {
+		return "empty response body"
+	}
+
+	if len(snippet) > limit {
+		return snippet[:limit] + "..."
+	}
+
+	return snippet
+}
+
+// get the currently loaded in memory models of Ollama
+func ollamaGetRunningModels() ([]RunningModel, error) {
+	resp, err := ollamaClient.Get("http://localhost:11434/api/ps")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama returned status: %s", resp.Status)
+	}
+
+	var result PSResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.Models, nil
+}
+
+// ContextLength reads the running model's context window from /api/ps. Zero
+// means Ollama did not report it, so the caller falls back to the default.
+func (OllamaShowResponse) ContextLength(selectedModel string) int {
+	runningModels, err := ollamaGetRunningModels()
+	if err != nil {
+		return 0
+	}
+
+	for _, modelData := range runningModels {
+		if modelData.Name == selectedModel {
+			return modelData.ContextLength
 		}
 	}
 

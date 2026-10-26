@@ -147,8 +147,9 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 
 	history := sess.Envelope()
 
+	turns := baseTurns
 	badBodies := 0
-	for turn := range MaxTurns {
+	for turn := 0; turn < turns; turn++ {
 		reply, promptTokens, err := chat(ctx, *history, modelName)
 		if err != nil {
 			return "", err
@@ -161,6 +162,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 			if abort != nil {
 				return "", abort
 			}
+			turns++
 			log.Printf("non-native turn %d: malformed envelope (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 			*history = append(*history, &dataTypes.NonNativeMessage{
 				Role:    "user",
@@ -200,6 +202,8 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 				},
 			)
 
+			turns = extendTurns(turns)
+
 		default:
 			// parseNonNativeResponse already rejects unknown types.
 			return "", fmt.Errorf(
@@ -209,5 +213,5 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 		}
 	}
 
-	return "", ErrMaxToolCalls
+	return "", ErrMaxInferenceCalls
 }
