@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattthew/optine/internal/harnessTools"
 )
 
@@ -81,9 +80,6 @@ func TestNoSpaceBeforeAndRunLineLen(t *testing.T) {
 // renderAgentContent must interpret the block constructs without panicking and
 // keep every line within a sane width budget.
 func TestRenderAgentContentBlocks(t *testing.T) {
-	m := newTestModel()
-	m, _ = update(m, tea.WindowSizeMsg{Width: 60, Height: 40})
-
 	content := strings.Join([]string{
 		"# Heading",
 		"",

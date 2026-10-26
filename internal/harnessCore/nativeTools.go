@@ -19,7 +19,7 @@ import (
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
-var ErrMalformedJSON = fmt.Errorf("The model sent a malformed JSON, skip tool calls and tell the model to retry its previous task.")
+var ErrMalformedJSON = fmt.Errorf("the model sent a malformed JSON, skip tool calls and tell the model to retry its previous task")
 
 var (
 	ollamaChatURL = "http://localhost:11434/api/chat"
