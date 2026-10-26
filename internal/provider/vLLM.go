@@ -42,7 +42,7 @@ func bodySnippet(r io.Reader) string {
 
 // actual functions
 func VLLMGetModelData() (string, error) {
-	resp, err := http.Get("http://localhost:8000/v1/models")
+	resp, err := vllmClient.Get("http://localhost:8000/v1/models")
 	if err != nil {
 		return "", err
 	}
