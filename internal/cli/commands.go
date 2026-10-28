@@ -81,7 +81,12 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 			log.Printf("error occurred while trying to get the CWD of user, err: %v", err)
 			return false
 		}
-		availableSess, err := harnessSession.List(cwd, true)
+		availableSess, listErr := harnessSession.List(cwd, true)
+
+		if listErr != nil {
+			log.Printf("error occurred while list the available sessions, err: %v", listErr)
+			return false
+		}
 
 		if len(availableSess) == 0 {
 			log.Println("No sessions related this directory, please run /local or /remote to start a new session")
