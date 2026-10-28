@@ -29,12 +29,12 @@ func BashToolCall(raw json.RawMessage, reader *bufio.Reader) harnessPermissions.
 	defer BashMu.Unlock()
 
 	SessionOnce.Do(func() {
-		audit, err := harnessPermissions.DefaultAuditPath()
+		auditPath, err := harnessPermissions.DefaultAuditPath()
 		if err != nil {
 			SessionErr = err
 			return
 		}
-		TheSession, SessionErr = harnessPermissions.NewBashSession("", audit)
+		TheSession, SessionErr = harnessPermissions.NewBashSession("", auditPath)
 	})
 	if SessionErr != nil {
 		return harnessPermissions.BashOutcome{Text: "bash is unavailable: " + SessionErr.Error()}
@@ -105,7 +105,7 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 	}
 	text, code := harnessPermissions.ExecBash(args.Command, s.Root, timeout)
 
-	harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Decision: "exit", ExitCode: &code})
+	harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Decision: "exit_after_execution", ExitCode: &code})
 	return harnessPermissions.BashOutcome{Text: text}
 }
 

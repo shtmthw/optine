@@ -14,6 +14,7 @@ import (
 // the shape every Update/View test starts from.
 func newTestModel() Model {
 	return New(
+		context.Background(),
 		"Ollama",
 		"test-model",
 		"/work",
@@ -178,6 +179,49 @@ func TestSubmitIgnoresEmptyAndBusy(t *testing.T) {
 	}
 }
 
+// runAgent runs the agent with the model's context, not context.Background().
+// Canceling the model context before the command runs propagates cancellation
+// into the agent.
+func TestRunAgentUsesModelContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	seen := make(chan context.Context, 1)
+	agent := func(c context.Context, _ string, _ string, _ string, _ *bufio.Reader) (string, error) {
+		seen <- c
+		return "", nil
+	}
+
+	m := New(ctx, "Ollama", "test-model", "/work", agent, bufio.NewReader(strings.NewReader("")), make(chan string, 1))
+	m.input = "hi"
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("submit should return a command")
+	}
+
+	// submit returns tea.Batch(runAgent(...), tick()). Run the batch's
+	// commands; executing only the outer command just yields a BatchMsg.
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("submit command = %T, want tea.BatchMsg", msg)
+	}
+	for _, sub := range batch {
+		if sub != nil {
+			sub()
+		}
+	}
+
+	select {
+	case c := <-seen:
+		if c.Err() != context.Canceled {
+			t.Fatalf("agent context err = %v, want Canceled", c.Err())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent was never invoked")
+	}
+}
+
 // agentFinishedMsg renders the reply into history and clears busy.
 func TestAgentFinishedAppendsReply(t *testing.T) {
 	m := newTestModel()
@@ -238,7 +282,7 @@ func TestApprovalRequestedShowsPrompt(t *testing.T) {
 // Enter forwards it to the approval channel.
 func TestSubmitAnswersApproval(t *testing.T) {
 	ch := make(chan string, 1)
-	m := New("Ollama", "m", "/w",
+	m := New(context.Background(), "Ollama", "m", "/w",
 		func(context.Context, string, string, string, *bufio.Reader) (string, error) { return "", nil },
 		bufio.NewReader(strings.NewReader("")), ch)
 	m.busy = true
@@ -303,7 +347,7 @@ func TestOptionAtHitTesting(t *testing.T) {
 // Clicking a button answers the approval; clicking elsewhere does nothing.
 func TestMouseClickAnswersApproval(t *testing.T) {
 	ch := make(chan string, 1)
-	m := New("Ollama", "m", "/w",
+	m := New(context.Background(), "Ollama", "m", "/w",
 		func(context.Context, string, string, string, *bufio.Reader) (string, error) { return "", nil },
 		bufio.NewReader(strings.NewReader("")), ch)
 	m.busy = true

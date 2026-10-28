@@ -185,8 +185,8 @@ func TestOllamaLoadModel(t *testing.T) {
 		if payload.Stream {
 			t.Error("stream = true, want false")
 		}
-		if payload.KeepAlive != "15m" {
-			t.Errorf("keep_alive = %q, want 15m", payload.KeepAlive)
+		if payload.KeepAlive != "5m" {
+			t.Errorf("keep_alive = %q, want 5m", payload.KeepAlive)
 		}
 
 		fmt.Fprint(w, `{"done_reason":"load"}`)

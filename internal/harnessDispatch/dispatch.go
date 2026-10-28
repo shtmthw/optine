@@ -85,7 +85,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			return "", err
 		}
 		logFileToolResult("edit_file", realPath, info)
-		auditFileTool("edit_file", call.Arguments, realPath, filepath.Dir(realPath), "exit", "", "")
+		auditFileTool("edit_file", call.Arguments, realPath, filepath.Dir(realPath), "exit_after_execution", "", "")
 		return info, nil
 
 	case "write_file":
@@ -105,7 +105,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			return "", err
 		}
 		logFileToolResult("write_file", realPath, info)
-		auditFileTool("write_file", call.Arguments, realPath, filepath.Dir(realPath), "exit", "", "")
+		auditFileTool("write_file", call.Arguments, realPath, filepath.Dir(realPath), "exit_after_execution", "", "")
 		return info, nil
 
 	case "bash":

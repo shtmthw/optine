@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"io"
 	"log"
+	"os"
 	"strings"
+
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 // RunCommand handles one slash command. It reports whether the caller should
@@ -37,7 +40,6 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		log.Println("Not a command that optine supports, type /help for the list")
 		return false
 	}
-
 	switch command {
 	case "/local":
 		if externalInput {
@@ -64,7 +66,7 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		return false
 
 	case "/help", "/h":
-		log.Println("available commands: /local (pick provider and start), /resume (pick session and resume work), /connect (connect to supported api providers), /funfact, /help, /quit")
+		log.Println("available commands: /local (pick provider and start), /resume (pick session and resume work), /remote (under development), /connect (connect to supported api providers), /funfact, /help, /quit")
 		return false
 
 	case "/quit", "/exit", "/q":
@@ -72,6 +74,40 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 
 	case "/funfact":
 		log.Println("this is a one man built agent, and that man is Matthew Baroi")
+		return false
+	case "/resume":
+		cwd, err := os.Getwd()
+		if err != nil {
+			log.Printf("error occurred while trying to get the CWD of user, err: %v", err)
+			return false
+		}
+		availableSess, err := harnessSession.List(cwd, true)
+
+		if len(availableSess) == 0 {
+			log.Println("No sessions related this directory, please run /local or /remote to start a new session")
+			return false
+		}
+
+		providerErr := checkProviderAvailability(availableSess[0].Provider, availableSess[0].Model)
+
+		if providerErr != nil {
+			log.Printf("Error: %v", providerErr)
+			return false
+		}
+		isNativeToolSupportive := true
+
+		if availableSess[0].Kind == "envelope" {
+			isNativeToolSupportive = false
+		}
+
+		log.Println("Resuming the last session related to this directory...")
+
+		//run the last sess resumer based on workdir
+		if err := runAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID); err != nil {
+			log.Printf("error occurred while trying to initiate the agent, err: %v", err)
+			return false
+		}
+
 		return false
 
 	default:

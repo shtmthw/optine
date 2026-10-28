@@ -47,7 +47,7 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	metas, err := List()
+	metas, err := List("", false)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

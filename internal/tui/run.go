@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"log"
 	"strings"
@@ -18,6 +19,9 @@ import (
 // is forwarded into the TUI, and approval answers typed by the user are
 // handed back to the harness through the shared reader.
 func Run(provider string, modelName string, workdir string, agent AgentFunc) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	approvalCh := make(chan string)
 
 	// done is closed when the TUI exits, so an approval prompt that is
@@ -29,7 +33,7 @@ func Run(provider string, modelName string, workdir string, agent AgentFunc) err
 	reader := bufio.NewReader(newLineSource(approvalCh, doneCh))
 
 	program := tea.NewProgram(
-		New(provider, modelName, workdir, agent, reader, approvalCh),
+		New(ctx, provider, modelName, workdir, agent, reader, approvalCh),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
@@ -60,6 +64,7 @@ func Run(provider string, modelName string, workdir string, agent AgentFunc) err
 	}()
 
 	_, err := program.Run()
+	cancel()
 	return err
 }
 

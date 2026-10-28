@@ -145,17 +145,58 @@ func Commit(s *Session) error {
 
 // Meta is the header summary /resume shows without loading full histories.
 type Meta struct {
-	UID       string
-	Provider  string
-	Model     string
-	Directory string
-	Kind      Kind
-	UpdatedAt time.Time
-	Messages  int
+	UID          string
+	Provider     string
+	Model        string
+	Directory    string
+	Kind         Kind
+	UpdatedAt    time.Time
+	Messages     int
+	ContextLimit int
+}
+
+func loopInternals(
+	sessionsDir string,
+	optionalDir string,
+	filterByDir bool,
+	entries []os.DirEntry,
+	metas *[]Meta,
+) {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(sessionsDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+
+		var f sessionFile
+		if err := json.Unmarshal(data, &f); err != nil {
+			continue
+		}
+
+		if filterByDir && f.Directory != optionalDir {
+			continue
+		}
+
+		*metas = append(*metas, Meta{
+			UID:          f.UID,
+			Provider:     f.Provider,
+			Model:        f.Model,
+			Directory:    f.Directory,
+			Kind:         f.Kind,
+			UpdatedAt:    f.UpdatedAt,
+			Messages:     f.messageLen(),
+			ContextLimit: f.ContextLimit,
+		})
+	}
 }
 
 // List returns saved sessions newest-first.
-func List() ([]Meta, error) {
+func List(optionalDir string, isOptionalDirAvailable bool) ([]Meta, error) {
+
 	dir, err := resolveSessionsDir()
 	if err != nil {
 		return nil, err
@@ -168,36 +209,10 @@ func List() ([]Meta, error) {
 
 	metas := make([]Meta, 0, len(entries))
 
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-
-		var f sessionFile
-		if err := json.Unmarshal(data, &f); err != nil {
-			continue
-		}
-
-		metas = append(metas, Meta{
-			UID:       f.UID,
-			Provider:  f.Provider,
-			Model:     f.Model,
-			Directory: f.Directory,
-			Kind:      f.Kind,
-			UpdatedAt: f.UpdatedAt,
-			Messages:  f.messageLen(),
-		})
-	}
-
+	loopInternals(dir, optionalDir, isOptionalDirAvailable, entries, &metas)
 	sort.Slice(metas, func(i, j int) bool {
 		return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
 	})
-
 	return metas, nil
 }
 

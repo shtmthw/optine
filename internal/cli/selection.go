@@ -172,7 +172,7 @@ func selectProvider(reader *bufio.Reader) error {
 		}
 
 		log.Printf("Model %s loaded", selectedModel)
-		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel))
+		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel), "")
 
 	case "vLLM":
 		modelName, err := provider.VLLMGetModelData()
@@ -197,7 +197,7 @@ func selectProvider(reader *bufio.Reader) error {
 			log.Printf("vLLM context window probe failed: %v", err)
 		}
 
-		return runAgentSession("vLLM", modelName, nativeToolCall, contextLimit)
+		return runAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "")
 	}
 
 	// wont ever reach
@@ -206,15 +206,17 @@ func selectProvider(reader *bufio.Reader) error {
 
 // runAgentSession owns the session for the whole TUI lifetime. One session,
 // one provider, one loop: history is never translated between formats.
-func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int) error {
+func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string) error {
 	// The agent's tools run against the process working directory, so that is
 	// the session's Directory: where reads, edits and commands will land.
+	var sess *harnessSession.Session
+
 	CWD, wdErr := os.Getwd()
 	if wdErr != nil {
 		log.Printf("working directory unavailable: %v", wdErr)
 		CWD = "unknown"
 	}
-	sess := harnessSession.New(harnessSession.Config{
+	sess = harnessSession.New(harnessSession.Config{
 		Provider:     providerName,
 		Model:        modelName,
 		Directory:    CWD,
@@ -229,9 +231,18 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 		NativeToolCalling: nativeToolCalling,
 	}
 
-	log.Printf("session %s started (%s, %s) in %s", sess.UID, providerName, modelName, sess.Directory)
+	if strings.TrimSpace(sessionUidfromCli) != "" {
+		next, err := harnessSession.Load(sessionUidfromCli)
+		if err != nil {
+			return handleError(err)
+		}
+		sess = next
 
-	agent := func(_ context.Context, _ string, _ string, msg string, r *bufio.Reader) (string, error) {
+	}
+
+	log.Printf("session %s running (%s, %s) in %s", sess.UID, providerName, modelName, sess.Directory)
+
+	agent := func(ctx context.Context, provider string, modelName string, msg string, r *bufio.Reader) (string, error) {
 		msg = strings.TrimSpace(msg)
 
 		if msg == "/resume" || strings.HasPrefix(msg, "/resume ") {
@@ -253,7 +264,7 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 			return "", nil
 		}
 
-		return harnessCore.AgentLoop(sess, agentConf, msg, r)
+		return harnessCore.AgentLoop(ctx, sess, agentConf, msg, r)
 	}
 
 	if ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, CWD, agent); ifaceErr != nil {
@@ -267,7 +278,7 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 // only answer approval prompts while the harness is blocked on one, so a
 // selection prompt here would hang. Listing and picking are both plain text.
 func resumeSession(current *harnessSession.Session, arg string) (*harnessSession.Session, []string) {
-	metas, err := harnessSession.List()
+	metas, err := harnessSession.List("", false)
 	if err != nil {
 		return nil, []string{"cannot read saved sessions: " + err.Error()}
 	}

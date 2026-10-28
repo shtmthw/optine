@@ -50,7 +50,7 @@ func OllamaLoadModel(selectedModel string) error {
 		"model":      selectedModel,
 		"messages":   []any{},
 		"stream":     false,
-		"keep_alive": "15m",
+		"keep_alive": "5m",
 	}
 
 	body, err := json.Marshal(payload)

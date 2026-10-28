@@ -162,7 +162,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 			if abort != nil {
 				return "", abort
 			}
-			turns++
+			turns = extendTurns(turns)
 			log.Printf("non-native turn %d: malformed envelope (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 			*history = append(*history, &dataTypes.NonNativeMessage{
 				Role:    "user",

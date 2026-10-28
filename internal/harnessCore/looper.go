@@ -3,6 +3,7 @@ package harnessCore
 import (
 	"bufio"
 	"context"
+	"errors"
 	"log"
 
 	"github.com/mattthew/optine/internal/dataTypes"
@@ -15,8 +16,7 @@ import (
 // creation, gets the user message appended here, and the provider loop appends
 // every assistant/tool turn into it. The session is committed to disk on every
 // exit path (answer, error, abort), best-effort — a bad disk never aborts a run.
-func AgentLoop(sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader) (string, error) {
-	ctx := context.Background()
+func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader) (string, error) {
 
 	// The session and the loop must agree on the message format: a mismatch
 	// would append into the wrong slot and silently lose the run.
@@ -57,9 +57,10 @@ func AgentLoop(sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, 
 	}
 
 	if err != nil {
-		log.Println("error occured in agent loop, err: ", err)
+		if !errors.Is(err, context.Canceled) {
+			log.Println("error occured in agent loop, err: ", err)
+		}
 		return "", err
 	}
-
 	return result, nil
 }

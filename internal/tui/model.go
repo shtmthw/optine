@@ -56,6 +56,7 @@ const (
 )
 
 type Model struct {
+	ctx       context.Context
 	provider  string
 	modelName string
 	workdir   string
@@ -179,6 +180,7 @@ var (
 )
 
 func New(
+	ctx context.Context,
 	provider string,
 	modelName string,
 	workdir string,
@@ -187,6 +189,7 @@ func New(
 	approvalCh chan<- string,
 ) Model {
 	return Model{
+		ctx:        ctx,
 		provider:   provider,
 		modelName:  modelName,
 		workdir:    workdir,
@@ -390,6 +393,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(
 		runAgent(
+			m.ctx,
 			m.agent,
 			m.provider,
 			m.modelName,
@@ -764,6 +768,7 @@ func (m Model) renderPrompt() string {
 }
 
 func runAgent(
+	ctx context.Context,
 	agent AgentFunc,
 	provider string,
 	modelName string,
@@ -772,7 +777,7 @@ func runAgent(
 ) tea.Cmd {
 	return func() tea.Msg {
 		response, err := agent(
-			context.Background(),
+			ctx,
 			provider,
 			modelName,
 			userMessage,
