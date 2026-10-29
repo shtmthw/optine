@@ -5,13 +5,8 @@ import (
 	"time"
 )
 
-// NonNativeToolSystemPrompt teaches the JSON envelope protocol, used when the
-// provider cannot call tools itself: the model asks for a tool with a JSON
-// object and the harness replies with the result as TOOL_RESULT text. Its
-// web_search teaching must match the web_search schema in dataTypes/tools.go
-// and NativeToolSystemPrompt; both render crawlerSection from
-// harnessTools.CrawlersAvailable(). read_file teaching comes from
-// readFileSection, shared with NativeToolSystemPrompt.
+// NonNativeToolSystemPrompt teaches the JSON envelope protocol. Its tool
+// teachings must stay in sync with the schemas in dataTypes/tools.go.
 func NonNativeToolSystemPrompt(now time.Time, maxTurns int, crawlers []string) string {
 	return fmt.Sprintf(`You are an AI assistant in a terminal. Today's date: %s.
 

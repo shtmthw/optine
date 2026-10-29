@@ -18,7 +18,7 @@ import (
 // log.Println (provider replies, tool call requests, approval prompts, ...)
 // is forwarded into the TUI, and approval answers typed by the user are
 // handed back to the harness through the shared reader.
-func Run(provider string, modelName string, workdir string, agent AgentFunc) error {
+func Run(provider string, modelName string, workdir string, resume []Message, agent AgentFunc) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -33,7 +33,7 @@ func Run(provider string, modelName string, workdir string, agent AgentFunc) err
 	reader := bufio.NewReader(newLineSource(approvalCh, doneCh))
 
 	program := tea.NewProgram(
-		New(ctx, provider, modelName, workdir, agent, reader, approvalCh),
+		New(ctx, provider, modelName, workdir, resume, agent, reader, approvalCh),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)

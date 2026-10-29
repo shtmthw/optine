@@ -33,6 +33,7 @@ func pathArgument(arguments map[string]any) (string, error) {
 	return path, nil
 }
 
+// ReadFilePolicy resolves and approves a read target.
 func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, error) {
 	path, err := pathArgument(arguments)
 	if err != nil {
@@ -52,7 +53,6 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 
 	realDir := filepath.Dir(realPath)
 
-	// The entire directory has already been approved for this session.
 	if approvedReadDirs[realDir] {
 		return realPath, nil
 	}
@@ -71,12 +71,9 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 
 	switch answer {
 	case Once:
-		// Allow this file once.
 		return realPath, nil
 
 	case Remember:
-		// Allow read_file access to this directory for the rest of
-		// the current session.
 		approvedReadDirs[realDir] = true
 		return realPath, nil
 

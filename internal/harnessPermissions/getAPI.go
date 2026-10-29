@@ -11,11 +11,10 @@ import (
 	"strings"
 )
 
+// GetAPIKey returns the stored key for provider.
 func GetAPIKey(provider string) (string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 
-	// AuthPath is the single resolved location of auth.json, set up by
-	// harnessPermissions at startup. No resolver of our own here.
 	if AuthPath == "" {
 		return "", errors.New("optine config dir unavailable, AuthPath was never resolved")
 	}

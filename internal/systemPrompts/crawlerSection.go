@@ -4,10 +4,8 @@ import (
 	"strings"
 )
 
-// crawlerSection renders the web_search crawler teaching shared by
-// NativeToolSystemPrompt and NonNativeToolSystemPrompt. The web_search schema
-// in dataTypes/tools.go and harnessTools.CrawlersAvailable() describe the same
-// fact set; change one, check the others.
+// crawlerSection renders the shared web_search crawler teaching. Keep it in
+// sync with dataTypes/tools.go and CrawlersAvailable.
 func crawlerSection(crawlers []string) string {
 	if len(crawlers) == 0 {
 		return "web_search has no usable crawlers right now. Do not call it."

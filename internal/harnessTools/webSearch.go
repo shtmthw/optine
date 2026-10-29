@@ -30,6 +30,7 @@ type crawlerResponse struct {
 	Results []*crawlerResult `json:"results"`
 }
 
+// SearchWeb runs a query through the named crawler.
 func SearchWeb(ctx context.Context, crawlerName string, query string) (string, error) {
 	const maxResults = 5
 
@@ -37,7 +38,6 @@ func SearchWeb(ctx context.Context, crawlerName string, query string) (string, e
 
 	switch crawlerName {
 	case "tavily":
-		// get the api from the auth.json in the .config dir
 		apiKey, err := harnessPermissions.GetAPIKey(crawlerName)
 		if err != nil {
 			return "", fmt.Errorf("error occured while getting the API key, err: %w", err)
@@ -185,7 +185,7 @@ func getSearXNGBaseURL() string {
 	return "http://localhost:8080"
 }
 
-// the func that pushes the craw;ers into the whole pipeline, add on here if new crawlers or search engines get added.
+// CrawlersAvailable lists the crawlers configured for this session.
 func CrawlersAvailable() []string {
 	crawlers := []string{"searxng"}
 

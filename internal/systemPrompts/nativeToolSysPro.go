@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// NativeToolSystemPrompt's web_search teaching must match the web_search
-// schema in dataTypes/tools.go and NonNativeToolSystemPrompt; both render
-// crawlerSection from harnessTools.CrawlersAvailable().
+// NativeToolSystemPrompt teaches native tool calling. Its tool teachings must
+// stay in sync with the schemas in dataTypes/tools.go.
 func NativeToolSystemPrompt(now time.Time, crawlers []string) string {
 	return fmt.Sprintf(`You are an AI assistant in a terminal. Today's date: %s.
 

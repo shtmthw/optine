@@ -41,8 +41,6 @@ func stubProvider(t *testing.T, client **http.Client, handler http.HandlerFunc) 
 	t.Cleanup(func() { *client = old })
 }
 
-// ---------------------------------------------------------------- ollama
-
 func TestOllamaGetModelData(t *testing.T) {
 	stubProvider(t, &ollamaClient, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/tags" {
@@ -227,8 +225,6 @@ func TestOllamaLoadModelErrors(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------- vllm
 
 func TestVLLMGetModelData(t *testing.T) {
 	stubProvider(t, &vllmClient, func(w http.ResponseWriter, r *http.Request) {

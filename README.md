@@ -23,7 +23,7 @@ saved as you go, and /resume brings one back after a restart.
 5. A JSONL audit log recorded before any action executes
 6. Long term casual memory the model keeps in a plain file you can watch
 7. A terminal interface with clickable approval prompts, markdown output and copy shortcuts
-8. Sessional memory: conversation history saved under your user config directory and reloaded with /resume, including the directory the session started in
+8. Sessional memory: conversation history saved under your user config directory and reloaded with /resume, including the directory the session started in, and replayed in the TUI
 
 ## Requirements
 
@@ -50,10 +50,12 @@ provider, model, directory and prompt token count. Sessions are written
 atomically, so quitting early cannot leave half a file behind.
 
 /resume lists saved sessions for the current provider and tool mode, and
-/resume last loads the newest one. A session remembers the directory it
-started in. If you resume it from a different directory, optine tells you
-and continues in the current one, because the tools always run where you
-launched optine.
+/resume last loads the newest one. A resumed session's saved conversation is
+shown in the terminal interface before you type again, so the previous user
+and assistant messages are visible in context. A session remembers the
+directory it started in. If you resume it from a different directory, optine
+tells you and continues in the current one, because the tools always run where
+you launched optine.
 
 ## Approvals
 

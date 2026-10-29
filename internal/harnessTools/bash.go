@@ -20,10 +20,8 @@ var (
 	SessionErr  error
 )
 
-// BashTool is the whole public surface: pass it the tool call's arguments JSON.
-// The workspace root is resolved here, on first use, from the directory the
-// program was started in. There is no root argument and nothing for the model
-// to change.
+// BashToolCall runs one bash tool call. The workspace root is resolved once
+// from the starting directory; the model cannot change it.
 func BashToolCall(raw json.RawMessage, reader *bufio.Reader) harnessPermissions.BashOutcome {
 	BashMu.Lock()
 	defer BashMu.Unlock()
@@ -49,7 +47,7 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 			`invalid arguments: %v. expected {"command": string, "description": string (optional), "timeout_ms": int (optional)}`, err)}
 	}
 
-	// 1. classify. An error means "can't analyze", which is a deny.
+	// Classify; an error means the command cannot be analyzed and is denied.
 	actions, err := harnessPermissions.ClassifyCommand(args.Command, s.Root)
 	if err != nil {
 		harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Decision: "deny", By: "policy", Reason: err.Error()})
@@ -58,7 +56,6 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 		}
 	}
 
-	// 2. decide
 	decision, why := harnessPermissions.BashPolicy(actions, s.Root, s.Grants)
 	by := "rule"
 	switch decision {
@@ -75,30 +72,26 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 		}
 		switch ans {
 		case harnessPermissions.Once:
-			// run this call, ask again next time
 		case harnessPermissions.Remember:
-			// AskFunc's label says "this tool", but granting the whole bash tool
-			// would turn every later ask (rm -rf, outside the workspace, curl)
-			// into an allow. So for bash it means: these exact commands, in
-			// these exact dirs. Deny and unanalyzable commands are never grantable.
+			// Remember grants these exact commands, not the whole bash tool.
 			for _, a := range actions {
 				if d, _ := harnessPermissions.PolicyForAction(a, s.Root); d == harnessPermissions.Ask && len(a.Argv) > 0 {
 					s.Grants = append(s.Grants, harnessPermissions.Grant{Argv: strings.Join(a.Argv, "\x00"), Dir: a.Dir})
 				}
 			}
-		default: // No, or any value we don't know
+		default:
 			harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "deny", By: "user", Reason: why})
 			return harnessPermissions.BashOutcome{Text: "the user denied this command: " + why}
 		}
 	}
 
-	// 3. log BEFORE running. If the log can't be written, don't run.
+	// Log before running; if the audit write fails, do not run.
 	rec := harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "allow", By: by, Reason: why}
 	if err := harnessPermissions.WriteAudit(s.AuditPath, rec); err != nil {
 		return harnessPermissions.BashOutcome{Text: "not run: audit log unavailable: " + err.Error()}
 	}
 
-	// 4. run exactly the string that was classified
+	// Run exactly the string that was classified.
 	timeout := harnessPermissions.DefaultTimeout
 	if args.TimeoutMs > 0 {
 		timeout = min(time.Duration(args.TimeoutMs)*time.Millisecond, harnessPermissions.MaxTimeout)
@@ -112,7 +105,7 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 // decodeBashArgs parses the tool call arguments.
 func decodeBashArgs(raw json.RawMessage) (harnessPermissions.BashArgs, error) {
 	var a harnessPermissions.BashArgs
-	// some servers send "arguments" as a string that contains the JSON object
+	// Some servers send arguments as a JSON string.
 	if len(raw) > 0 && raw[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
@@ -121,7 +114,7 @@ func decodeBashArgs(raw json.RawMessage) (harnessPermissions.BashArgs, error) {
 		raw = json.RawMessage(s)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields() // a model-supplied "workdir" is an error, not silently ignored
+	dec.DisallowUnknownFields() // reject a model-supplied "workdir"
 	if err := dec.Decode(&a); err != nil {
 		return a, err
 	}

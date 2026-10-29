@@ -21,7 +21,14 @@ type AgentFunc func(
 	modelName string,
 	userMessage string,
 	reader *bufio.Reader,
-) (string, error)
+) (AgentResult, error)
+
+// AgentResult is one agent turn. Non-nil Messages replaces the visible
+// conversation; /resume and /restore use it to swap sessions atomically.
+type AgentResult struct {
+	Response string
+	Messages []Message
+}
 
 // Roles a Message can have.
 const (
@@ -94,6 +101,7 @@ type clickTargets struct {
 
 type agentFinishedMsg struct {
 	response string
+	swap     []Message
 	err      error
 }
 
@@ -184,11 +192,12 @@ func New(
 	provider string,
 	modelName string,
 	workdir string,
+	resume []Message,
 	agent AgentFunc,
 	reader *bufio.Reader,
 	approvalCh chan<- string,
 ) Model {
-	return Model{
+	m := Model{
 		ctx:        ctx,
 		provider:   provider,
 		modelName:  modelName,
@@ -198,6 +207,12 @@ func New(
 		approvalCh: approvalCh,
 		clicks:     &clickTargets{},
 	}
+
+	if resume != nil {
+		m.messages = append([]Message(nil), resume...)
+	}
+
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -257,7 +272,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingApproval = false
 		m.hovered = ""
 
-		if msg.err != nil {
+		if msg.swap != nil {
+			// /resume and /restore replace the old conversation wholesale.
+			m.messages = msg.swap
+			m.scroll = 0
+		} else if msg.err != nil {
 			m.messages = append(m.messages, Message{
 				Role:    roleError,
 				Content: msg.err.Error(),
@@ -776,7 +795,7 @@ func runAgent(
 	reader *bufio.Reader,
 ) tea.Cmd {
 	return func() tea.Msg {
-		response, err := agent(
+		result, err := agent(
 			ctx,
 			provider,
 			modelName,
@@ -785,7 +804,8 @@ func runAgent(
 		)
 
 		return agentFinishedMsg{
-			response: response,
+			response: result.Response,
+			swap:     result.Messages,
 			err:      err,
 		}
 	}

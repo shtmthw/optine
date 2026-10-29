@@ -20,8 +20,7 @@ func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName s
 		Messages: messages,
 		Stream:   false,
 
-		// This asks Ollama to keep the output valid JSON.
-		// It is NOT native tool calling.
+		// Valid JSON output, not native tool calling.
 		Format: "json",
 	}
 
@@ -39,8 +38,7 @@ func produceVLLMNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelNa
 		Messages: messages,
 		Stream:   false,
 
-		// OpenAI-compatible servers ask for the same thing as
-		// Format: "json", just spelled differently.
+		// vLLM spells Ollama's Format:"json" as response_format.
 		ResponseFormat: &responseFormat,
 	}
 
@@ -73,9 +71,7 @@ func vllmNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessa
 	return &result.Choices[0].Message, result.Usage.PromptTokens, nil
 }
 
-// parseNonNativeResponse pulls the JSON envelope out of a reply. The fence
-// stripping is defensive: format:"json" should prevent it, but models still
-// wrap JSON in markdown from time to time.
+// parseNonNativeResponse pulls the JSON envelope out of a reply.
 func parseNonNativeResponse(content string) (*dataTypes.NonNativeLLMResponse, error) {
 	content = strings.TrimSpace(content)
 
@@ -113,13 +109,10 @@ func parseNonNativeResponse(content string) (*dataTypes.NonNativeLLMResponse, er
 	return &response, nil
 }
 
-// maxEnvelopeExcerpt caps the raw reply quoted back in a correction so one
-// huge garbage dump does not flood the context it is trying to rescue.
+// maxEnvelopeExcerpt caps the raw reply quoted in a correction.
 const maxEnvelopeExcerpt = 500
 
-// correctionForBadEnvelope builds the retry instruction for a malformed
-// envelope reply. Unlike the native path the offending text is held here, so
-// it is quoted back (truncated) for the model to debug. Pure for testability.
+// correctionForBadEnvelope builds the retry instruction for a malformed reply.
 func correctionForBadEnvelope(raw string) string {
 	if runes := []rune(raw); len(runes) > maxEnvelopeExcerpt {
 		raw = string(runes[:maxEnvelopeExcerpt])
@@ -174,8 +167,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 
 		switch aiResponse.Type {
 		case "final_answer":
-			// Persist the assistant's final envelope as sent; a session that
-			// only stores user turns is not a transcript.
+			// Keep the assistant envelope in the transcript.
 			*history = append(*history, reply)
 
 			return aiResponse.Content, nil
@@ -183,8 +175,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 		case "tool_call":
 			result := runTool(ctx, reader, aiResponse.Tool, aiResponse.Arguments)
 
-			// Keep the assistant's JSON tool request and the actual tool
-			// result together: one append, so no exit path can separate them.
+			// Keep the request and result together.
 			*history = append(*history,
 				reply,
 				&dataTypes.NonNativeMessage{
@@ -205,7 +196,6 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 			turns = extendTurns(turns)
 
 		default:
-			// parseNonNativeResponse already rejects unknown types.
 			return "", fmt.Errorf(
 				"unknown response type %q",
 				aiResponse.Type,

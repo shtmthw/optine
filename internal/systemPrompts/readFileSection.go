@@ -2,17 +2,10 @@ package systemPrompts
 
 import "fmt"
 
-// MaxReadLines is the line cap read_file enforces. It is duplicated here as a
-// prompt fact because the system prompts teach paging and cannot import
-// harnessTools (that would be a cycle: harnessTools pulls in the prompt-facing
-// tooling). Keep this in sync with harnessTools.MaxReadLines; the classifier
-// tests assert the same number on the tool side.
+// MaxReadLines mirrors harnessTools.MaxReadLines; keep them in sync.
 const MaxReadLines = 2000
 
-// readFileSection renders the read_file paging teaching shared by
-// NativeToolSystemPrompt and NonNativeToolSystemPrompt. The read_file schema in
-// dataTypes/tools.go and harnessTools.ReadFile describe the same fact set;
-// change one, check the others.
+// readFileSection renders the read_file paging teaching shared by both prompts.
 func readFileSection() string {
 	return fmt.Sprintf(`read_file paging
 read_file returns at most %d lines per call. Do not try to read a whole long file in one call.

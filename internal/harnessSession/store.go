@@ -18,8 +18,6 @@ import (
 var resolveSessionsDir = defaultSessionsDir
 
 // defaultSessionsDir derives the sessions directory from AuthPath's parent.
-// Per internal/harnessPermissions/optineConfigDir.go, every config-dir file is
-// derived from AuthPath; no other package resolves os.UserConfigDir itself.
 func defaultSessionsDir() (string, error) {
 	if harnessPermissions.AuthPath == "" {
 		return "", errors.New("optine config dir unavailable")
@@ -35,22 +33,24 @@ func defaultSessionsDir() (string, error) {
 }
 
 // sessionFile is the on-disk shape. Exactly one message array is populated,
-// matching Kind, so history is replayed exactly as the server sent it.
+// matching Kind.
 type sessionFile struct {
-	UID              string                             `json:"uid"`
-	Kind             Kind                               `json:"kind"`
-	Provider         string                             `json:"provider"`
-	Model            string                             `json:"model"`
-	Directory        string                             `json:"directory,omitempty"`
-	CreatedAt        time.Time                          `json:"created_at"`
-	UpdatedAt        time.Time                          `json:"updated_at"`
-	ContextLimit     int                                `json:"context_limit,omitempty"`
-	MaxTurns         int                                `json:"max_turns,omitempty"`
-	RunCount         int                                `json:"run_count"`
-	LastPromptTokens int                                `json:"last_prompt_tokens,omitempty"`
-	Ollama           []*dataTypes.NativeTooltypeMessage `json:"ollama_messages,omitempty"`
-	VLLM             []*dataTypes.VLLMTooltypeMessage   `json:"vllm_messages,omitempty"`
-	Envelope         []*dataTypes.NonNativeMessage      `json:"envelope_messages,omitempty"`
+	UID               string                             `json:"uid"`
+	Kind              Kind                               `json:"kind"`
+	Provider          string                             `json:"provider"`
+	Model             string                             `json:"model"`
+	Directory         string                             `json:"directory,omitempty"`
+	CreatedAt         time.Time                          `json:"created_at"`
+	UpdatedAt         time.Time                          `json:"updated_at"`
+	ContextLimit      int                                `json:"context_limit,omitempty"`
+	MaxTurns          int                                `json:"max_turns,omitempty"`
+	GitStatus         bool                               `json:"git_status,omitempty"`
+	RunCount          int                                `json:"run_count"`
+	TotalUserMessages int                                `json:"total_user_messages"`
+	LastPromptTokens  int                                `json:"last_prompt_tokens,omitempty"`
+	Ollama            []*dataTypes.NativeTooltypeMessage `json:"ollama_messages,omitempty"`
+	VLLM              []*dataTypes.VLLMTooltypeMessage   `json:"vllm_messages,omitempty"`
+	Envelope          []*dataTypes.NonNativeMessage      `json:"envelope_messages,omitempty"`
 }
 
 func (f sessionFile) messageLen() int {
@@ -68,17 +68,19 @@ func (f sessionFile) messageLen() int {
 
 func toFile(s *Session) sessionFile {
 	f := sessionFile{
-		UID:              s.UID,
-		Kind:             s.Kind,
-		Provider:         s.Provider,
-		Model:            s.Model,
-		Directory:        s.Directory,
-		CreatedAt:        s.CreatedAt,
-		UpdatedAt:        s.UpdatedAt,
-		ContextLimit:     s.ContextLimit,
-		MaxTurns:         s.MaxTurns,
-		RunCount:         s.RunCount,
-		LastPromptTokens: s.LastPromptTokens,
+		UID:               s.UID,
+		Kind:              s.Kind,
+		Provider:          s.Provider,
+		Model:             s.Model,
+		Directory:         s.Directory,
+		CreatedAt:         s.CreatedAt,
+		UpdatedAt:         s.UpdatedAt,
+		ContextLimit:      s.ContextLimit,
+		MaxTurns:          s.MaxTurns,
+		GitStatus:         s.GitStatus,
+		RunCount:          s.RunCount,
+		TotalUserMessages: s.TotalUserMessages,
+		LastPromptTokens:  s.LastPromptTokens,
 	}
 
 	switch s.Kind {
@@ -93,9 +95,7 @@ func toFile(s *Session) sessionFile {
 	return f
 }
 
-// Commit persists the session after a run. Best-effort: the caller logs
-// failures, and a bad disk never aborts the agent loop. Sessions that never
-// ran are skipped so /local without a message leaves no files behind.
+// Commit persists the session after a run. Sessions that never ran are skipped.
 func Commit(s *Session) error {
 	if s == nil || s.RunCount == 0 {
 		return nil
@@ -145,14 +145,16 @@ func Commit(s *Session) error {
 
 // Meta is the header summary /resume shows without loading full histories.
 type Meta struct {
-	UID          string
-	Provider     string
-	Model        string
-	Directory    string
-	Kind         Kind
-	UpdatedAt    time.Time
-	Messages     int
-	ContextLimit int
+	UID               string
+	Provider          string
+	Model             string
+	Directory         string
+	Kind              Kind
+	UpdatedAt         time.Time
+	Messages          int
+	TotalUserMessages int
+	ContextLimit      int
+	GitStatus         bool
 }
 
 func loopInternals(
@@ -182,14 +184,16 @@ func loopInternals(
 		}
 
 		*metas = append(*metas, Meta{
-			UID:          f.UID,
-			Provider:     f.Provider,
-			Model:        f.Model,
-			Directory:    f.Directory,
-			Kind:         f.Kind,
-			UpdatedAt:    f.UpdatedAt,
-			Messages:     f.messageLen(),
-			ContextLimit: f.ContextLimit,
+			UID:               f.UID,
+			Provider:          f.Provider,
+			Model:             f.Model,
+			Directory:         f.Directory,
+			Kind:              f.Kind,
+			UpdatedAt:         f.UpdatedAt,
+			Messages:          f.messageLen(),
+			TotalUserMessages: f.TotalUserMessages,
+			ContextLimit:      f.ContextLimit,
+			GitStatus:         f.GitStatus,
 		})
 	}
 }
@@ -216,9 +220,7 @@ func List(optionalDir string, isOptionalDirAvailable bool) ([]Meta, error) {
 	return metas, nil
 }
 
-// Load restores a session by UID. The system message is refreshed from the
-// current notebook/crawler state on load, so resumed sessions never serve a
-// stale memory snapshot.
+// Load restores a session by UID and refreshes its system message.
 func Load(uid string) (*Session, error) {
 	if uid == "" || uid != filepath.Base(uid) || strings.ContainsAny(uid, `/\`) {
 		return nil, fmt.Errorf("invalid session id %q", uid)
@@ -240,17 +242,19 @@ func Load(uid string) (*Session, error) {
 	}
 
 	s := &Session{
-		UID:              uid,
-		Kind:             f.Kind,
-		Provider:         f.Provider,
-		Model:            f.Model,
-		Directory:        f.Directory,
-		CreatedAt:        f.CreatedAt,
-		UpdatedAt:        f.UpdatedAt,
-		ContextLimit:     f.ContextLimit,
-		MaxTurns:         f.MaxTurns,
-		RunCount:         f.RunCount,
-		LastPromptTokens: f.LastPromptTokens,
+		UID:               uid,
+		Kind:              f.Kind,
+		Provider:          f.Provider,
+		Model:             f.Model,
+		Directory:         f.Directory,
+		CreatedAt:         f.CreatedAt,
+		UpdatedAt:         f.UpdatedAt,
+		ContextLimit:      f.ContextLimit,
+		MaxTurns:          f.MaxTurns,
+		GitStatus:         f.GitStatus,
+		RunCount:          f.RunCount,
+		TotalUserMessages: f.TotalUserMessages,
+		LastPromptTokens:  f.LastPromptTokens,
 	}
 
 	if s.ContextLimit <= 0 {
@@ -284,9 +288,8 @@ func Load(uid string) (*Session, error) {
 	return s, nil
 }
 
-// validateOllamaPairs rejects a history where an assistant tool-call message
-// has fewer following tool replies than calls. Ollama ignores call ids, so
-// only the count is enforced.
+// validateOllamaPairs rejects an assistant tool-call message with too few
+// following tool replies. Ollama ignores call ids, so only the count matters.
 func validateOllamaPairs(msgs []*dataTypes.NativeTooltypeMessage) error {
 	for i, msg := range msgs {
 		if msg == nil {
@@ -310,8 +313,7 @@ func validateOllamaPairs(msgs []*dataTypes.NativeTooltypeMessage) error {
 	return nil
 }
 
-// validateVLLMPairs is the vLLM counterpart. OpenAI-compatible servers match
-// tool replies by id, so every call id must have its reply.
+// validateVLLMPairs checks that every vLLM tool call id has a reply.
 func validateVLLMPairs(msgs []*dataTypes.VLLMTooltypeMessage) error {
 	for i, msg := range msgs {
 		if msg == nil {

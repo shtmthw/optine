@@ -1,8 +1,6 @@
 package dataTypes
 
-// WebSearch teaches the two crawlers together with crawlerSection in
-// internal/systemPrompts and harnessTools.CrawlersAvailable; change one,
-// check the other two.
+// WebSearch must stay in sync with crawlerSection and CrawlersAvailable.
 var WebSearch = NativeTypeTool{
 	Type: "function",
 	Function: NativeTypeToolFunction{

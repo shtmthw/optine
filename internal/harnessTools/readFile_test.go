@@ -26,8 +26,6 @@ func numbered(n int) string {
 	return b.String()
 }
 
-// ---------------------------------------------------------------- full reads
-
 func TestReadFileReturnsWholeSmallFile(t *testing.T) {
 	path := writeTemp(t, "a.txt", "one\ntwo\nthree\n")
 
@@ -57,8 +55,6 @@ func TestReadFileWholeFileNotTruncated(t *testing.T) {
 		t.Fatalf("expected the last line, got tail: %q", tail(got, 80))
 	}
 }
-
-// ---------------------------------------------------------------- paging
 
 func TestReadFilePagesLongFile(t *testing.T) {
 	path := writeTemp(t, "big.txt", numbered(4500))
@@ -119,8 +115,6 @@ func TestReadFileStartBeyondEOF(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- clamping
-
 func TestReadFileClampsOverLongRangeAndReportsTruncation(t *testing.T) {
 	path := writeTemp(t, "big.txt", numbered(10))
 
@@ -169,8 +163,6 @@ func TestReadFileExactCapRangeNotTruncated(t *testing.T) {
 		t.Fatalf("want next-window hint at 7001: %q", tail(got, 200))
 	}
 }
-
-// ---------------------------------------------------------------- args
 
 func TestReadFileArgsDefaultsAndValidation(t *testing.T) {
 	start, end, err := ReadFileArgs(map[string]any{"path": "f"})

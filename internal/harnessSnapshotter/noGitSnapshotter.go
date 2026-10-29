@@ -14,20 +14,16 @@ import (
 
 // Directories we never snapshot. A real version should read .gitignore too.
 var skipDirs = map[string]bool{
-	// Version control
 	".git": true,
 
-	// Dependencies
 	"node_modules":     true,
 	"bower_components": true,
 
-	// Build outputs
 	"build":    true,
 	"dist":     true,
 	"target":   true,
 	"coverage": true,
 
-	// Framework build caches
 	".next":         true,
 	".nuxt":         true,
 	".svelte-kit":   true,
@@ -35,18 +31,15 @@ var skipDirs = map[string]bool{
 	".parcel-cache": true,
 	".vite":         true,
 
-	// General caches
 	".cache":        true,
 	"__pycache__":   true,
 	".pytest_cache": true,
 	".mypy_cache":   true,
 	".ruff_cache":   true,
 
-	// Python virtual environments
 	".venv": true,
 	"venv":  true,
 
-	// Platform-specific dependencies
 	"Pods": true,
 }
 
@@ -63,11 +56,8 @@ func Track(workdir, storeDir, id string) error {
 	return writeAtomic(filepath.Join(storeDir, "manifests", id+".json"), data, 0o600)
 }
 
-// Revert restores every path that differs between the beforeID and afterID
-// snapshots to its state in beforeID: changed or deleted files get their old
-// bytes back, files created in between are removed. It returns the paths it
-// touched. Paths that are identical in both snapshots (including anything the
-// agent never touched) are left alone.
+// Revert restores changed or deleted files to their beforeID bytes and removes
+// files created since. Identical paths are left alone.
 func Revert(workdir, storeDir, beforeID, afterID string) ([]string, error) {
 	before, err := loadManifest(storeDir, beforeID)
 	if err != nil {
@@ -124,8 +114,7 @@ func Revert(workdir, storeDir, beforeID, afterID string) ([]string, error) {
 	return revertedPaths, nil
 }
 
-// scan walks workdir, stores each regular file as a blob, and returns the
-// manifest (relative path with forward slashes -> hash).
+// scan stores each regular file as a blob and returns its manifest.
 func scan(workdir, storeDir string) (map[string]string, error) {
 	root, err := filepath.Abs(workdir)
 	if err != nil {
@@ -203,13 +192,8 @@ func localPath(workdir, rel string) (string, error) {
 	return filepath.Join(workdir, rel), nil
 }
 
-// writeAtomic writes to a temp file and renames it into place, so a crash
-// can't leave a half-written blob or manifest behind.
-//
-// If path already exists, the new file keeps its permission bits (so an
-// executable stays executable). Otherwise it gets defaultPerm. os.CreateTemp
-// always makes 0600 files, so without this step every replaced file would end
-// up 0600.
+// writeAtomic writes via a temp file and rename. An existing target keeps its
+// permission bits; otherwise defaultPerm is used.
 func writeAtomic(path string, data []byte, defaultPerm os.FileMode) error {
 	perm := defaultPerm
 	info, err := os.Stat(path)
@@ -227,7 +211,7 @@ func writeAtomic(path string, data []byte, defaultPerm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name()) // harmless after a successful rename
+	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
@@ -235,8 +219,7 @@ func writeAtomic(path string, data []byte, defaultPerm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// Chmod, not a mode passed at creation: Chmod ignores the umask, so the
-	// bits come out exactly as they were.
+	// Chmod ignores the umask, keeping the original bits exactly.
 	if err := os.Chmod(tmp.Name(), perm); err != nil {
 		return err
 	}

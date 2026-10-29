@@ -1,15 +1,3 @@
-// First draft of the Casual Mode command classifier.
-//
-//	shell string → classifyCommand → []Action → policyHandler (not written here)
-//
-// Rules of this draft:
-//   - Only a small whitelist of shell syntax is accepted (see classifyStmt).
-//     Anything else returns an error and the caller denies without asking.
-//   - Commands that parse fine but that we know nothing about get Class Exec
-//     (the caller should ask).
-//   - No methods, plain functions and structs.
-//
-// this is fucking hell yo dont read this shit yo, im serious yo
 package harnessPermissions
 
 import (
@@ -23,7 +11,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// Class is a set of flags, OR them together.
+// Class is a bitmask of command effects.
 type Class uint8
 
 const (
@@ -50,14 +38,10 @@ type Action struct {
 
 var homeDir, _ = os.UserHomeDir()
 
-// cwd is resolved once at startup and seeds the per-session approval maps in
-// the file policies. A failure is not fatal, but it must not pre-approve a
-// bogus path: see baseApprovedDirs.
+// cwd seeds the per-session approval maps in the file policies.
 var cwd, cwdErr = os.Getwd()
 
-// baseApprovedDirs seeds the cwd entry the three file tools start from. When
-// os.Getwd fails we cannot name the working directory, so nothing is
-// pre-approved and every directory is ask-once: fail closed, not open.
+// baseApprovedDirs pre-approves cwd, or nothing if cwd is unknown.
 func baseApprovedDirs() map[string]bool {
 	if cwdErr != nil {
 		log.Println("working directory unavailable, no directory is pre-approved:", cwdErr)
@@ -73,8 +57,7 @@ type spec struct {
 	CwdToo   bool // always add the cwd (grep: can't tell the pattern from a path)
 }
 
-// Anything not in this table is Exec. Grow it as real runs need more.
-// Left out on purpose for now: git, sed, awk, sort, tar, python, make...
+// Unknown commands are treated as Exec; add entries only when needed.
 var specs = map[string]spec{
 	"ls":    {Class: Read, Implicit: true},
 	"cat":   {Class: Read},
@@ -100,10 +83,7 @@ var specs = map[string]spec{
 	"wget":  {Class: Network | Exec, NoPaths: true},
 }
 
-// ---------------------------------------------------------------- entry point
-
-// classifyCommand returns one Action per simple command in cmd.
-// An error means "can't analyze this", the caller should deny.
+// ClassifyCommand returns one Action per simple command. An error means deny.
 func ClassifyCommand(cmd, startDir string) ([]Action, error) {
 	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
 	f, err := parser.Parse(strings.NewReader(cmd), "")
@@ -119,7 +99,7 @@ func ClassifyCommand(cmd, startDir string) ([]Action, error) {
 		return nil, err
 	}
 	var all []Action
-	for _, st := range f.Stmts { // top-level ';' and newlines run in order
+	for _, st := range f.Stmts {
 		acts, newDir, err := classifyStmt(st, dir)
 		if err != nil {
 			return nil, err
@@ -130,11 +110,8 @@ func ClassifyCommand(cmd, startDir string) ([]Action, error) {
 	return all, nil
 }
 
-// ---------------------------------------------------------------- statements
-
-// classifyStmt accepts: simple commands, &&, ||, | and |&, redirects.
-// Everything else (subshells, blocks, if/for/while, functions, [[ ]], $(( ))...)
-// is rejected by default.
+// classifyStmt supports simple commands, &&, ||, pipes and redirects.
+// Everything else is rejected so the caller can deny it.
 func classifyStmt(st *syntax.Stmt, dir string) ([]Action, string, error) {
 	if st.Background || st.Coprocess {
 		return nil, dir, errors.New("background commands are not supported")
@@ -195,8 +172,6 @@ func classifyStmt(st *syntax.Stmt, dir string) ([]Action, string, error) {
 	}
 	return nil, dir, fmt.Errorf("unsupported construct %T", st.Cmd)
 }
-
-// ---------------------------------------------------------------- simple command
 
 func classifyCall(c *syntax.CallExpr, dir string) (Action, string, error) {
 	act := Action{Dir: dir}
@@ -297,8 +272,8 @@ func classifyCall(c *syntax.CallExpr, dir string) (Action, string, error) {
 	return act, dir, nil
 }
 
-// pathArgs treats every non-flag argument as a path. This over-counts
-// (`head -n 5 f` makes "5" a path) but never drops a real path.
+// pathArgs treats every non-flag argument as a path. It may over-count, but
+// never drops one.
 func pathArgs(args []word) ([]word, error) {
 	var out []word
 	afterDD := false
@@ -395,17 +370,14 @@ func isFD(s string) bool {
 	return true
 }
 
-// ---------------------------------------------------------------- words
-
 // word is one shell word after quote removal.
 type word struct {
 	Text   string
 	GlobAt int // index in Text of the first unquoted * ? [ , or -1
 }
 
-// evalWord turns a parsed word into plain text. It only understands literals,
-// quotes, and a leading ~ or ~/. Any other expansion ($x, $(..), `..`, $((..)),
-// <(..), {a,b}, ~user, $'..') is an error: we can't know what it expands to.
+// evalWord resolves literals, quotes and a leading ~. Other expansions are
+// rejected because their result cannot be known statically.
 func evalWord(w *syntax.Word) (word, error) {
 	var sb strings.Builder
 	globAt := -1
@@ -471,11 +443,8 @@ func evalWord(w *syntax.Word) (word, error) {
 	return word{Text: sb.String(), GlobAt: globAt}, nil
 }
 
-// ---------------------------------------------------------------- paths
-
-// wordPath resolves a word to the path the policy should look at.
-// For a glob it returns the directory before the first glob char: every
-// match lives under it. (rm build/*.o -> build, rm * -> cwd)
+// wordPath resolves a word to the path the policy should check. For a glob it
+// returns the directory before the first glob character.
 func wordPath(dir string, w word) (string, error) {
 	if w.GlobAt < 0 {
 		return resolvePath(dir, w.Text)
@@ -493,17 +462,12 @@ func wordPath(dir string, w word) (string, error) {
 	return resolvePath(dir, base)
 }
 
-// resolvePath makes p absolute and resolves symlinks. EvalSymlinks fails on a
-// path that doesn't exist yet (touch new.txt), so it resolves the deepest part
-// that does exist and appends the rest as-is.
+// resolvePath makes p absolute and resolves symlinks, including the deepest
+// existing ancestor of a path that does not exist yet. A dangling or looping
+// symlink is an error so a write cannot escape the approved directory.
 //
-// If EvalSymlinks fails but the entry DOES exist (Lstat works), it is a
-// dangling or looping symlink, or an unreadable dir. A write through a dangling
-// link creates its target, which can be outside the root, so that is an error
-// and the caller denies.
-//
-// Known gap: filepath.Clean collapses "link/.." lexically, the kernel follows
-// the symlink first. Fine for a draft, fix before trusting it.
+// Known gap: filepath.Clean handles "link/.." lexically, while the kernel
+// follows the link first.
 func resolvePath(dir, p string) (string, error) {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(dir, p)

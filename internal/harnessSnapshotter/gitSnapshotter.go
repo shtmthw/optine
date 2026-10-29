@@ -13,8 +13,7 @@ import (
 )
 
 // GitAvailable reports whether a working git is installed. It runs git rather
-// than only looking it up on the PATH, because on some systems a "git" stub
-// exists that fails until developer tools are installed.
+// than only looking it up, because some "git" stubs fail until dev tools exist.
 func GitAvailable() bool {
 	return exec.Command("git", "--version").Run() == nil
 }
@@ -45,11 +44,8 @@ func GitTrack(workdir, storeDir, id string) error {
 	return writeAtomic(filepath.Join(storeDir, "trees", id), []byte(strings.TrimSpace(tree)), 0o600)
 }
 
-// GitRevert restores every path that differs between the beforeID and afterID
-// snapshots to its state in beforeID: changed or deleted files are checked out
-// of the "before" tree, files created in between are removed. It returns the
-// paths it touched. Redo is the same call with a "post-undo" snapshot, as in
-// Revert.
+// GitRevert restores paths to their state in beforeID: changed or deleted files
+// are checked out from the "before" tree, and files created since are removed.
 func GitRevert(workdir, storeDir, beforeID, afterID string) ([]string, error) {
 	workdir, err := filepath.Abs(workdir)
 	if err != nil {
@@ -106,9 +102,8 @@ func GitRevert(workdir, storeDir, beforeID, afterID string) ([]string, error) {
 
 	// Changed or deleted since "before": check the old versions out.
 	if len(changed) > 0 {
-		// git checkout recreates files with 0666/0777 minus the umask, which
-		// would loosen a 0600 file to 0644. Remember the modes of files that
-		// still exist and put them back afterwards, like writeAtomic does.
+		// git checkout resets modes to 0666/0777 minus umask, which would
+		// loosen a 0600 file. Restore the modes we saw.
 		modes := map[string]os.FileMode{}
 		for _, rel := range changed {
 			path, err := localPath(workdir, rel)
@@ -137,13 +132,10 @@ func GitRevert(workdir, storeDir, beforeID, afterID string) ([]string, error) {
 	return revertedPaths, nil
 }
 
-// git runs one git command against the private repo and returns its stdout.
-// The flags make the result independent of the user's git setup:
-//   - --literal-pathspecs: paths are taken literally. Without it a file named
-//     ":x.txt" is parsed as pathspec magic, so git would silently restore
-//     "x.txt" instead and still exit 0
-//   - core.autocrlf=false and no global/system config or global ignore file,
-//     so the user's own settings can't change or hide any file
+// git runs one command against the private repo. Literal pathspecs prevent a
+// file named ":x.txt" from being parsed as pathspec magic; global config,
+// ignore files, hooks and autocrlf are disabled so the user's setup cannot
+// affect bytes.
 func git(workdir, storeDir string, args ...string) (string, error) {
 	base := []string{
 		"--git-dir", filepath.Join(storeDir, "git"),
@@ -151,10 +143,11 @@ func git(workdir, storeDir string, args ...string) (string, error) {
 		"--literal-pathspecs",
 		"-c", "core.autocrlf=false",
 		"-c", "core.excludesFile=" + os.DevNull,
+		"-c", "core.hooksPath=" + os.DevNull,
 	}
 	cmd := exec.Command("git", append(base, args...)...)
 	cmd.Dir = workdir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+	cmd.Env = gitEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -163,6 +156,19 @@ func git(workdir, storeDir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// gitEnv returns the process environment without inherited GIT_* overrides
+// (index/object stores, injected config) so shell setup cannot redirect the
+// private repo, and pins config sources.
+func gitEnv() []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
 }
 
 // gitInit creates the private repo on first use; later calls do nothing.

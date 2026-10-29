@@ -13,6 +13,7 @@ import (
 	"github.com/mattthew/optine/internal/dataTypes"
 	"github.com/mattthew/optine/internal/harnessCore"
 	"github.com/mattthew/optine/internal/harnessSession"
+	"github.com/mattthew/optine/internal/harnessSnapshotter"
 	"github.com/mattthew/optine/internal/provider"
 	"github.com/mattthew/optine/internal/tui"
 )
@@ -71,7 +72,7 @@ func handleAPIkeyInput(reader *bufio.Reader, selectedConnection string) error {
 	return nil
 }
 
-// shows the use the range of available services they can connect to
+// selectConnection prompts for an API provider and stores its key.
 func selectConnection(reader *bufio.Reader) error {
 	log.Println("<connector list>")
 
@@ -133,7 +134,6 @@ func selectProvider(reader *bufio.Reader) error {
 
 	switch selectedProvider {
 	case "Ollama":
-		//call Ollama probing
 		modelSlice, err := provider.OllamaGetModelData()
 
 		if err != nil {
@@ -172,7 +172,7 @@ func selectProvider(reader *bufio.Reader) error {
 		}
 
 		log.Printf("Model %s loaded", selectedModel)
-		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel), "")
+		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel), "", false)
 
 	case "vLLM":
 		modelName, err := provider.VLLMGetModelData()
@@ -196,19 +196,16 @@ func selectProvider(reader *bufio.Reader) error {
 		if err != nil {
 			log.Printf("vLLM context window probe failed: %v", err)
 		}
-
-		return runAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "")
+		return runAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "", false)
 	}
 
-	// wont ever reach
 	return nil
 }
 
-// runAgentSession owns the session for the whole TUI lifetime. One session,
-// one provider, one loop: history is never translated between formats.
-func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string) error {
-	// The agent's tools run against the process working directory, so that is
-	// the session's Directory: where reads, edits and commands will land.
+// runAgentSession owns the session for the whole TUI lifetime.
+func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string, fromCLI bool) error {
+	// Tools run against the process working directory, so that is the
+	// session's Directory.
 	var sess *harnessSession.Session
 
 	CWD, wdErr := os.Getwd()
@@ -216,6 +213,7 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 		log.Printf("working directory unavailable: %v", wdErr)
 		CWD = "unknown"
 	}
+
 	sess = harnessSession.New(harnessSession.Config{
 		Provider:     providerName,
 		Model:        modelName,
@@ -223,6 +221,7 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 		Kind:         harnessSession.KindFor(providerName, nativeToolCalling),
 		ContextLimit: contextLimit,
 		MaxTurns:     harnessCore.MaxTurns,
+		GitStatus:    harnessSnapshotter.GitAvailable(),
 	})
 
 	agentConf := dataTypes.AgentConfig{
@@ -231,52 +230,58 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 		NativeToolCalling: nativeToolCalling,
 	}
 
+	var initialMessages []tui.Message
+
 	if strings.TrimSpace(sessionUidfromCli) != "" {
 		next, err := harnessSession.Load(sessionUidfromCli)
 		if err != nil {
 			return handleError(err)
 		}
 		sess = next
-
+		initialMessages = tui.TranscriptMessages(sess.Transcript())
 	}
 
 	log.Printf("session %s running (%s, %s) in %s", sess.UID, providerName, modelName, sess.Directory)
 
-	agent := func(ctx context.Context, provider string, modelName string, msg string, r *bufio.Reader) (string, error) {
+	agent := func(ctx context.Context, provider string, modelName string, msg string, r *bufio.Reader) (tui.AgentResult, error) {
 		msg = strings.TrimSpace(msg)
 
 		if msg == "/resume" || strings.HasPrefix(msg, "/resume ") {
 			next, lines := resumeSession(sess, strings.TrimSpace(strings.TrimPrefix(msg, "/resume")))
 			if next != nil {
-				// if resumeable successfully the curr sess get overwritten with the fetched sess
 				sess = next
+
+				// Replace the pane with the newly-loaded conversation.
+				return tui.AgentResult{
+					Messages: tui.TranscriptMessages(next.Transcript()),
+				}, nil
 			}
 
 			for _, line := range lines {
 				log.Println(line)
 			}
 
-			return "", nil
+			return tui.AgentResult{}, nil
 		}
 
 		if strings.HasPrefix(msg, "/") {
 			RunCommand(msg, true, r)
-			return "", nil
+			return tui.AgentResult{}, nil
 		}
 
-		return harnessCore.AgentLoop(ctx, sess, agentConf, msg, r)
+		answer, err := harnessCore.AgentLoop(ctx, sess, agentConf, msg, r)
+		return tui.AgentResult{Response: answer}, err
 	}
 
-	if ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, CWD, agent); ifaceErr != nil {
+	if ifaceErr := tui.Run(agentConf.Provider, agentConf.Model, CWD, initialMessages, agent); ifaceErr != nil {
 		return handleError(ifaceErr)
 	}
 
 	return nil
 }
 
-// resumeSession loads a saved session without blocking on input: the TUI can
-// only answer approval prompts while the harness is blocked on one, so a
-// selection prompt here would hang. Listing and picking are both plain text.
+// resumeSession loads a saved session without blocking on input. Listing and
+// picking are plain text because an approval prompt cannot run here.
 func resumeSession(current *harnessSession.Session, arg string) (*harnessSession.Session, []string) {
 	metas, err := harnessSession.List("", false)
 	if err != nil {
@@ -333,9 +338,7 @@ func resumeSession(current *harnessSession.Session, arg string) (*harnessSession
 			lines = append(lines, fmt.Sprintf("model changed from %s to %s", current.Model, next.Model))
 		}
 
-		// Tools always run in the process working directory, so keep the
-		// session record truthful when it was forcefully started started somewhere else.
-		// as its already coded to not show sessions that does not match the CWD
+		// Keep the session record aligned with where tools actually run.
 		switch {
 		case next.Directory == "":
 			next.Directory = current.Directory

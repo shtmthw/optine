@@ -6,7 +6,8 @@ import (
 	"github.com/mattthew/optine/internal/provider"
 )
 
-// for the /resume in the CLI stage, inserts all the cases for added providers.
+// checkProviderAvailability confirms the selected provider is reachable before
+// resuming a session.
 func checkProviderAvailability(providerName, modelName string) error {
 
 	switch providerName {

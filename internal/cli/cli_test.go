@@ -10,6 +10,7 @@ import (
 
 	"github.com/mattthew/optine/internal/dataTypes"
 	"github.com/mattthew/optine/internal/harnessPermissions"
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 // freshAuth points auth.json at a brand-new temp file for one test, so each
@@ -157,4 +158,61 @@ func readAuth(t *testing.T) dataTypes.AuthConfig {
 		t.Fatalf("parsing auth.json: %v", err)
 	}
 	return cfg
+}
+
+// resumeSession returns the loaded session with a replayable transcript so the
+// TUI can show the previous conversation.
+func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
+	freshAuth(t)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	saved := harnessSession.New(harnessSession.Config{
+		Provider:     "Ollama",
+		Model:        "test-model",
+		Directory:    cwd,
+		Kind:         harnessSession.OllamaNative,
+		ContextLimit: 4096,
+		MaxTurns:     55,
+		GitStatus:    true,
+	})
+	saved.BeginRun()
+	saved.AppendUser("earlier question")
+	*saved.Ollama() = append(*saved.Ollama(),
+		&dataTypes.NativeTooltypeMessage{Role: "assistant", Content: "earlier answer"},
+	)
+
+	if err := harnessSession.Commit(saved); err != nil {
+		t.Fatalf("commit saved session: %v", err)
+	}
+
+	current := harnessSession.New(harnessSession.Config{
+		Provider:     "Ollama",
+		Model:        "test-model",
+		Directory:    cwd,
+		Kind:         harnessSession.OllamaNative,
+		ContextLimit: 4096,
+		MaxTurns:     55,
+	})
+
+	next, lines := resumeSession(current, "last")
+	if next == nil {
+		t.Fatalf("resume returned no session, lines: %v", lines)
+	}
+
+	if !next.GitStatus {
+		t.Fatal("git status lost while resuming")
+	}
+
+	entries := next.Transcript()
+	if len(entries) != 2 || entries[0].Content != "earlier question" || entries[1].Content != "earlier answer" {
+		t.Fatalf("unexpected transcript: %+v", entries)
+	}
+
+	if len(lines) == 0 || !strings.Contains(lines[0], "resumed session") {
+		t.Fatalf("resume status line missing: %v", lines)
+	}
 }

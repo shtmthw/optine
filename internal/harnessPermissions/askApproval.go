@@ -15,10 +15,11 @@ type Answer int
 
 const (
 	No       Answer = iota // zero value: anything unclear is a no
-	Once                   // run this call now; ask again next time
-	Remember               // run it and allow this tool for the rest of the session
+	Once                   // this call only
+	Remember               // this tool for the rest of the session
 )
 
+// AskFunc prompts the user to approve one tool call.
 func AskFunc(tool string, reader *bufio.Reader, arguments map[string]any, content string) (Answer, error) {
 	log.Printf("\nThe agent wants to run:\n  tool: %s", tool)
 
@@ -33,8 +34,7 @@ func AskFunc(tool string, reader *bufio.Reader, arguments map[string]any, conten
 		log.Printf("  description: %s", content)
 	}
 
-	// Tell whatever interface is in front of the user that a prompt is up.
-	// The TUI shows its approval buttons in response; the CLI ignores it.
+	// Notify the active interface that a prompt is up; the CLI ignores it.
 	approval.Notify()
 
 	log.Print("Allow? [y] once  [a] always (this tool/command)  [N] no: ")

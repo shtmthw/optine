@@ -9,10 +9,8 @@ import (
 	"github.com/mattthew/optine/internal/dataTypes"
 )
 
-// Kind identifies which provider-native message format a session holds.
-// One session always lives on one loop: switching provider mid-session would
-// mean translating history between formats, which this harness deliberately
-// never does.
+// Kind identifies the provider-native message format a session holds. A
+// session never switches format mid-run.
 type Kind string
 
 const (
@@ -21,9 +19,7 @@ const (
 	Envelope     Kind = "envelope"
 )
 
-// DefaultContextLimit is used when the provider cannot report a model's
-// context window. Conservative on purpose: local servers often run small
-// windows.
+// DefaultContextLimit is used when the provider reports no context window.
 const DefaultContextLimit = 8192
 
 // Config describes the run a session is created for.
@@ -33,15 +29,12 @@ type Config struct {
 	Directory    string
 	Kind         Kind
 	ContextLimit int
-	// MaxTurns is the envelope loop's call budget. It is needed to build the
-	// envelope system prompt; native kinds ignore it.
-	MaxTurns int
+	MaxTurns     int
+	GitStatus    bool
 }
 
-// Session owns one conversation's history plus its system-prompt cache.
-//
-// Single-writer rule: only the agent run goroutine appends to the slots. The
-// TUI never reads them, and /resume swaps the whole session between runs.
+// Session owns one conversation's history and system-prompt cache. Only the
+// agent run goroutine appends; display code reads through Transcript().
 type Session struct {
 	UID       string
 	Kind      Kind
@@ -51,10 +44,12 @@ type Session struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	ContextLimit     int
-	MaxTurns         int
-	RunCount         int
-	LastPromptTokens int
+	ContextLimit      int
+	MaxTurns          int
+	GitStatus         bool
+	RunCount          int
+	TotalUserMessages int
+	LastPromptTokens  int
 
 	SystemCache systemCache
 
@@ -63,9 +58,7 @@ type Session struct {
 	envelope []*dataTypes.NonNativeMessage
 }
 
-// OnActiveSession is the UI bridge: the TUI sets it to display the session UID
-// and receives updates when the active session changes. Nil-safe, mirroring
-// internal/approval.
+// OnActiveSession is the UI bridge for the active session UID.
 var OnActiveSession func(uid string)
 
 // KindFor maps the provider + tool mode picked at startup onto the loop kind.
@@ -81,9 +74,8 @@ func KindFor(provider string, nativeToolCalling bool) Kind {
 	return OllamaNative
 }
 
-// New builds an in-memory session with its system message seeded. It never
-// touches the disk: the file appears on the first Commit, so quitting before
-// the first message leaves no empty sessions behind.
+// New builds an in-memory session with its system message seeded. The file is
+// written on first Commit, so quitting before the first message leaves nothing.
 func New(cfg Config) *Session {
 	limit := cfg.ContextLimit
 	if limit <= 0 {
@@ -100,6 +92,7 @@ func New(cfg Config) *Session {
 		UpdatedAt:    time.Now(),
 		ContextLimit: limit,
 		MaxTurns:     cfg.MaxTurns,
+		GitStatus:    cfg.GitStatus,
 	}
 
 	s.SystemCache = newSystemCache(cfg.Kind, cfg.MaxTurns)
@@ -120,6 +113,8 @@ func (s *Session) BeginRun() {
 
 // AppendUser appends the new user message to the active slot.
 func (s *Session) AppendUser(content string) {
+	s.TotalUserMessages++
+
 	switch s.Kind {
 	case OllamaNative:
 		s.ollama = append(s.ollama, &dataTypes.NativeTooltypeMessage{Role: "user", Content: content})
@@ -140,8 +135,8 @@ func (s *Session) VLLM() *[]*dataTypes.VLLMTooltypeMessage { return &s.vllm }
 
 func (s *Session) Envelope() *[]*dataTypes.NonNativeMessage { return &s.envelope }
 
-// RecordPromptTokens stores the provider's measured prompt size. Zero means
-// the provider did not report it, so the last known value is kept.
+// RecordPromptTokens stores the provider's measured prompt size. Zero keeps
+// the last known value.
 func (s *Session) RecordPromptTokens(n int) {
 	if n > 0 {
 		s.LastPromptTokens = n
@@ -171,7 +166,7 @@ func (s *Session) Resumeable(kind Kind) error {
 	return nil
 }
 
-// setSystemContent replaces ( or updates ) the system message in the active slot.
+// setSystemContent replaces or inserts the system message in the active slot.
 func (s *Session) setSystemContent(content string) {
 	switch s.Kind {
 	case OllamaNative:

@@ -23,13 +23,13 @@ func stubSessionsDir(t *testing.T) string {
 }
 
 func TestCommitLoadRoundTrip(t *testing.T) {
-	stubSessionsDir(t)
+	dir := stubSessionsDir(t)
 
 	memory := "notebook"
 	crawlers := []string{"searxng"}
 	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
 
-	sess := New(Config{Provider: "Ollama", Model: "m", Directory: "/home/matthew/optine", Kind: OllamaNative})
+	sess := New(Config{Provider: "Ollama", Model: "m", Directory: "/home/matthew/optine", Kind: OllamaNative, GitStatus: true})
 	sess.BeginRun()
 	sess.AppendUser("hello")
 
@@ -47,6 +47,14 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
+	raw, err := os.ReadFile(filepath.Join(dir, sess.UID+".json"))
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	if !strings.Contains(string(raw), `"total_user_messages": 1`) {
+		t.Fatalf("session file missing total_user_messages: %s", raw)
+	}
+
 	metas, err := List("", false)
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -54,6 +62,12 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 
 	if len(metas) != 1 || metas[0].UID != sess.UID || metas[0].Messages != sess.Len() || metas[0].Directory != sess.Directory {
 		t.Fatalf("unexpected listing: %+v", metas)
+	}
+	if !metas[0].GitStatus {
+		t.Fatal("git status lost in listing")
+	}
+	if metas[0].TotalUserMessages != 1 {
+		t.Fatalf("user message count lost in listing: %d", metas[0].TotalUserMessages)
 	}
 
 	loaded, err := Load(sess.UID)
@@ -63,6 +77,12 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 
 	if loaded.Kind != sess.Kind || loaded.Provider != sess.Provider || loaded.Model != sess.Model || loaded.Directory != sess.Directory {
 		t.Fatalf("metadata lost on load: %+v", loaded)
+	}
+	if !loaded.GitStatus {
+		t.Fatal("git status lost on load")
+	}
+	if loaded.TotalUserMessages != 1 {
+		t.Fatalf("user message count lost on load: %d", loaded.TotalUserMessages)
 	}
 
 	if loaded.Len() != sess.Len() {

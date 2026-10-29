@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// types and helpers
 type VLLMModelsResponse struct {
 	Data []struct {
 		ID          string `json:"id"`
@@ -40,7 +39,6 @@ func bodySnippet(r io.Reader) string {
 	return string(b)
 }
 
-// actual functions
 func VLLMGetModelData() (string, error) {
 	resp, err := vllmClient.Get("http://localhost:8000/v1/models")
 	if err != nil {
@@ -49,9 +47,7 @@ func VLLMGetModelData() (string, error) {
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-
 	case http.StatusOK:
-		//continue
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "", ErrNeedsKey
 
@@ -104,14 +100,10 @@ func VLLMGetModelContextLength() (int, error) {
 	return data.Data[0].ModelInfo.MaxModelLen, nil
 }
 
-// rules:
-// false and err means do not conitune to the agent loop,
-// false and nil means tool calling is not native,
-// true and nil means tool calling is native,
-// truen and err does not exist.
+// VLLMRunSmokeTest reports whether native tool calling works. A nil error with
+// false means native tools are unavailable; an error means the test could not run.
 func VLLMRunSmokeTest(modelName string) (bool, error) {
 
-	// dummy payload
 	payload := map[string]any{
 		"model": modelName,
 		"messages": []map[string]string{
@@ -174,23 +166,18 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 
 		if strings.Contains(vllmErr.Error.Message, "requires --enable-auto-tool-choice") &&
 			strings.Contains(vllmErr.Error.Message, "--tool-call-parser") {
-			// specifically means auto tool calling isn't configured
 			return false, nil
 		}
 
-		// A different 400 is NOT evidence that tools are disabled.
 		return false, fmt.Errorf("vLLM rejected smoke test: %s", vllmErr.Error.Message)
 
 	case 401, 403:
-		// key needed: can't tell anything about tools yet
 		return false, ErrNeedsKey
 
 	case 422:
-		// malformed request
 		return false, fmt.Errorf("malformed smoke-test request: %s", bodySnippet(resp.Body))
 
 	case 200:
-		// deep check: did a structured tool call actually come back?
 		var r struct {
 			Choices []struct {
 				Message struct {
@@ -203,17 +190,17 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 			} `json:"choices"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-			return false, fmt.Errorf("could not decode smoke-test response: %w", err) // 200 but unusable body
+			return false, fmt.Errorf("could not decode smoke-test response: %w", err)
 		}
 		if len(r.Choices) > 0 &&
 			len(r.Choices[0].Message.ToolCalls) > 0 &&
 			r.Choices[0].Message.ToolCalls[0].Function.Name == "get_test_value" {
-			return true, nil // native tools work
+			return true, nil
 		}
-		return false, nil // 200 but no tool_calls -> envelope
+		return false, nil
 
 	default:
-		// 404, 429, 5xx, etc.: the test couldn't run, so don't downgrade silently
+		// The test could not run; do not silently downgrade.
 		return false, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, bodySnippet(resp.Body))
 	}
 

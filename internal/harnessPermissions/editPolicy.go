@@ -11,14 +11,11 @@ import (
 	"syscall"
 )
 
-// MaxFileToolBytes caps model-provided texts for edit_file (old+new combined)
-// and write_file (content). Full texts enter model history, so bound them;
-// previews shown to the user are capped separately in harnessTools.
+// MaxFileToolBytes caps model-provided edit and write text before it enters
+// history. Previews are capped separately.
 const MaxFileToolBytes = 256 * 1024
 
-// approvedEditDirs remembers directories the user approved with "always" for
-// edit_file this session. Separate from read's approvedDirs so reading a dir
-// never implies permission to change it.
+// approvedEditDirs is the per-session "always" set for edit_file.
 var approvedEditDirs = baseApprovedDirs()
 
 var ErrEditDenied = errors.New("edit request has been denied by the user")
@@ -65,9 +62,7 @@ func editArgs(arguments map[string]any) (path, oldString, newString string, err 
 	return path, oldString, newString, nil
 }
 
-// additionArgs pulls the edit_file append-mode arguments out of the model's
-// request. Same idea as editArgs minus old_string: the addition is appended
-// byte-for-byte, so there is nothing to match.
+// additionArgs parses append-mode arguments. There is no old_string to match.
 func additionArgs(arguments map[string]any) (path, newString string, err error) {
 	if path, err = editStringArg(arguments, "path"); err != nil {
 		return "", "", err
@@ -89,8 +84,7 @@ func additionArgs(arguments map[string]any) (path, newString string, err error) 
 	return path, newString, nil
 }
 
-// EditAppendFlag reads the optional edit_file "append" argument. Missing,
-// non-bool, or false means a normal old->new replacement.
+// EditAppendFlag reports whether edit_file is in append mode.
 func EditAppendFlag(arguments map[string]any) bool {
 	appendRaw, ok := arguments["append"]
 	if !ok {
@@ -100,8 +94,7 @@ func EditAppendFlag(arguments map[string]any) bool {
 	return ok && appendFlag
 }
 
-// editAsk is AskFunc for edit_file with fixed arguments. redact hides the
-// texts (lengths only) so sensitive content never reaches approval logs.
+// editAsk prompts for edit_file. When redact is set, only lengths are logged.
 func editAsk(reader *bufio.Reader, path, oldString, newString, prompt string, redact bool) (Answer, error) {
 	args := map[string]any{"path": path, "old_string": oldString, "new_string": newString}
 	if redact {
@@ -110,18 +103,10 @@ func editAsk(reader *bufio.Reader, path, oldString, newString, prompt string, re
 	return AskFunc("edit_file", reader, args, prompt)
 }
 
-// EditFilePolicy resolves the model's path and enforces the edit guards:
-//   - edit-only: the file must already exist (missing file is an error, not a create)
-//   - Lstat on the model-provided path first: a symlink always triggers its own
-//     AskFunc, even in an approved dir (a link can point outside the workspace)
-//   - sensitive files (.env, .ssh, .gnupg, .password-store) always trigger
-//     AskFunc, even in an approved dir
-//   - otherwise cwd is pre-approved, any other dir asks once per dir per session
-//     via AskFunc, with Remember storing the dir in approvedEditDirs
-//
-// It returns the resolved real path plus the verified old/new strings.
-// In append mode (isAddition) old_string is not required and returns empty;
-// new_string is appended byte-for-byte by the executor.
+// EditFilePolicy resolves and approves an edit target. The file must already
+// exist; symlinks and hardlinks ask explicitly; sensitive files always ask;
+// other directories ask once per session. Append mode returns an empty
+// oldString and the content to append.
 func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition bool) (realPath, oldString, newString string, err error) {
 	var modelPath string
 	var argumentErr error
@@ -136,9 +121,7 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 		return "", "", "", argumentErr
 	}
 
-	// Lstat the path as the model gave it, before resolving anything. It does
-	// not follow the final link, so it sees a symlink itself. Any Lstat error
-	// other than "does not exist" falls through, EvalSymlinks below reports it.
+	// Lstat before resolving so a symlink is seen as a symlink.
 	linkRemember := false
 	wasSymlink := false
 	info, lerr := os.Lstat(modelPath)
@@ -155,9 +138,8 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 		}
 		switch answer {
 		case Once:
-			// allow this call, continue with the normal checks below
 		case Remember:
-			linkRemember = true // the resolved dir is stored only if every later check passes
+			linkRemember = true
 		default:
 			return "", "", "", fmt.Errorf("edit_file %q: %w", modelPath, ErrEditDenied)
 		}
@@ -181,10 +163,8 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 		return "", "", "", fmt.Errorf("edit_file %q: is a directory, not a file", realPath)
 	}
 
-	// Hardlinks share their data with another path, which may live outside
-	// the workspace (EvalSymlinks never resolves them). Treat like a symlink:
-	// ask, since editing mutates the shared inode. Skipped when the model
-	// path was itself a symlink: following links was already approved above.
+	// Hardlinks can share data outside the workspace, so ask explicitly.
+	// Following a symlink was already approved above.
 	if !wasSymlink {
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 			answer, err := editAsk(reader, realPath, oldString, newString,
@@ -194,9 +174,8 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 			}
 			switch answer {
 			case Once:
-				// allow this call, continue with the normal checks below
 			case Remember:
-				linkRemember = true // the resolved dir is stored only if every later check passes
+				linkRemember = true
 			default:
 				return "", "", "", fmt.Errorf("edit_file %q: %w", realPath, ErrEditDenied)
 			}
@@ -212,10 +191,7 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 		prompt = fmt.Sprintf("Wants to edit a sensitive file %q. Allow it?", realPath)
 	case !approvedEditDirs[realDir]:
 		if linkRemember {
-			// Link "always" already approved persistence: store the
-			// resolved dir without a second prompt. Sensitive files
-			// still went through their own approval above, so a
-			// denial there stores nothing.
+			// A link "always" also approves its resolved directory.
 			approvedEditDirs[realDir] = true
 			return realPath, oldString, newString, nil
 		}
@@ -227,7 +203,6 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 		}
 		return realPath, oldString, newString, nil
 	}
-
 	answer, err := editAsk(reader, realPath, oldString, newString, prompt, redact)
 	if err != nil {
 		return "", "", "", err

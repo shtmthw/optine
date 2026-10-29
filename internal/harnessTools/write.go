@@ -9,14 +9,11 @@ import (
 	"github.com/mattthew/optine/internal/harnessPermissions"
 )
 
-// MaxWritePreview caps the content excerpt in the deterministic result so a
-// huge file does not flood the model context or the TUI event feed.
+// MaxWritePreview caps the content excerpt in the result.
 const MaxWritePreview = 2000
 
-// WriteFile creates the file at realPath (already resolved and approved by
-// WriteFilePolicy) with content and returns a deterministic info string built
-// only from what was actually written. Create-only: an existing target is an
-// error (use edit_file). Missing parents are created with 0755.
+// WriteFile creates a new file and returns a deterministic result. It never
+// overwrites; missing parents are created with 0755.
 func WriteFile(realPath, content string) (string, error) {
 	if fi, err := os.Lstat(realPath); err == nil {
 		if fi.Mode()&os.ModeSymlink != 0 {
@@ -48,7 +45,6 @@ func WriteFile(realPath, content string) (string, error) {
 		return "", fmt.Errorf("write_file %q: temp file: %w", realPath, err)
 	}
 	tmpName := tmp.Name()
-	// Best effort cleanup; renamed away on success.
 	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.WriteString(content); err != nil {
@@ -69,9 +65,7 @@ func WriteFile(realPath, content string) (string, error) {
 	return FormatWriteResult(realPath, dir, filepath.Base(realPath), content), nil
 }
 
-// FormatWriteResult builds the deterministic harness reply for a passing
-// write. Stable WRITE_OK prefix keeps TUI parsing to a HasPrefix check,
-// mirroring FormatEditResult's EDIT_OK.
+// FormatWriteResult builds the deterministic WRITE_OK reply.
 func FormatWriteResult(realPath, dir, file, content string) string {
 	lines := 0
 	if content != "" {

@@ -18,9 +18,8 @@ type NonNativeChatResponse struct {
 	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
 }
 
-// The OpenAI-compatible shape vLLM serves on /v1/chat/completions. The response
-// is wrapped in a "choices" array, and "format":"json" is spelled
-// "response_format" instead.
+// OpenAI-compatible non-native shapes served by vLLM, where "format":"json"
+// is spelled "response_format".
 
 // NonNativeResponseFormat is vLLM's equivalent of Ollama's Format: "json".
 type NonNativeResponseFormat struct {

@@ -18,8 +18,9 @@ func newTestModel() Model {
 		"Ollama",
 		"test-model",
 		"/work",
-		func(context.Context, string, string, string, *bufio.Reader) (string, error) {
-			return "", nil
+		nil,
+		func(context.Context, string, string, string, *bufio.Reader) (AgentResult, error) {
+			return AgentResult{}, nil
 		},
 		bufio.NewReader(strings.NewReader("")),
 		make(chan string, 1),
@@ -187,12 +188,12 @@ func TestRunAgentUsesModelContext(t *testing.T) {
 	cancel()
 
 	seen := make(chan context.Context, 1)
-	agent := func(c context.Context, _ string, _ string, _ string, _ *bufio.Reader) (string, error) {
+	agent := func(c context.Context, _ string, _ string, _ string, _ *bufio.Reader) (AgentResult, error) {
 		seen <- c
-		return "", nil
+		return AgentResult{}, nil
 	}
 
-	m := New(ctx, "Ollama", "test-model", "/work", agent, bufio.NewReader(strings.NewReader("")), make(chan string, 1))
+	m := New(ctx, "Ollama", "test-model", "/work", nil, agent, bufio.NewReader(strings.NewReader("")), make(chan string, 1))
 	m.input = "hi"
 	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -282,8 +283,10 @@ func TestApprovalRequestedShowsPrompt(t *testing.T) {
 // Enter forwards it to the approval channel.
 func TestSubmitAnswersApproval(t *testing.T) {
 	ch := make(chan string, 1)
-	m := New(context.Background(), "Ollama", "m", "/w",
-		func(context.Context, string, string, string, *bufio.Reader) (string, error) { return "", nil },
+	m := New(context.Background(), "Ollama", "m", "/w", nil,
+		func(context.Context, string, string, string, *bufio.Reader) (AgentResult, error) {
+			return AgentResult{}, nil
+		},
 		bufio.NewReader(strings.NewReader("")), ch)
 	m.busy = true
 	m.pendingApproval = true
@@ -347,8 +350,10 @@ func TestOptionAtHitTesting(t *testing.T) {
 // Clicking a button answers the approval; clicking elsewhere does nothing.
 func TestMouseClickAnswersApproval(t *testing.T) {
 	ch := make(chan string, 1)
-	m := New(context.Background(), "Ollama", "m", "/w",
-		func(context.Context, string, string, string, *bufio.Reader) (string, error) { return "", nil },
+	m := New(context.Background(), "Ollama", "m", "/w", nil,
+		func(context.Context, string, string, string, *bufio.Reader) (AgentResult, error) {
+			return AgentResult{}, nil
+		},
 		bufio.NewReader(strings.NewReader("")), ch)
 	m.busy = true
 	m.pendingApproval = true

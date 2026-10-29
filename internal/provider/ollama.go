@@ -42,9 +42,7 @@ var ollamaModelLoader = &http.Client{
 	Timeout: 500 * time.Second,
 }
 
-// OllamaLoadModel loads the selected model into memory with an empty chat
-// request. Ollama returns only after the model is ready, so this can block for
-// minutes; the CLI wraps the call in a spinner.
+// OllamaLoadModel loads the selected model into memory and blocks until ready.
 func OllamaLoadModel(selectedModel string) error {
 	payload := map[string]any{
 		"model":      selectedModel,
@@ -115,7 +113,7 @@ func ollamaResponseSnippet(raw []byte) string {
 	return snippet
 }
 
-// get the currently loaded in memory models of Ollama
+// ollamaGetRunningModels lists the models Ollama has loaded.
 func ollamaGetRunningModels() ([]RunningModel, error) {
 	resp, err := ollamaClient.Get("http://localhost:11434/api/ps")
 	if err != nil {
@@ -164,9 +162,7 @@ func OllamaGetModelData() ([]string, error) {
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-
 	case http.StatusOK:
-		//continue
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, ErrNeedsKey
 

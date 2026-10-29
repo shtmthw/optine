@@ -9,35 +9,27 @@ import (
 	"time"
 )
 
-// MaxEditPreview caps each old/new excerpt in the deterministic result so a
-// huge replacement does not flood the model context or the TUI event feed.
+// MaxEditPreview caps each old/new excerpt in the result.
 const MaxEditPreview = 2000
 
-// editLockTimeout bounds how long EditFile waits for another editor's flock
-// before giving up so the agent gets a retryable error instead of hanging.
-// editLockPoll is the retry interval for non-blocking LOCK_EX attempts.
+// editLockTimeout and editLockPoll bound the wait for another editor's flock.
 const (
 	editLockTimeout = 5 * time.Second
 	editLockPoll    = 50 * time.Millisecond
 )
 
-// appendContent returns fileData with additionString appended byte-for-byte.
-// Pure string concat by design: no newline insertion or separator logic,
-// mirroring the byte-based splice the edit path uses.
+// appendContent appends byte-for-byte, with no newline insertion.
 func appendContent(fileData, additionString string) string {
 	return fileData + additionString
 }
 
-// writeAtomicReplace persists updated to realPath atomically: temp file in
-// the same dir, Sync for durability, Chmod to mode, then Rename. Shared by
-// the edit and append paths so both get identical durability semantics.
+// writeAtomicReplace writes updated through a temp file, Sync, Chmod and Rename.
 func writeAtomicReplace(dir, realPath, updated string, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(dir, ".edit-*")
 	if err != nil {
 		return fmt.Errorf("edit_file %q: temp file: %w", realPath, err)
 	}
 	tmpName := tmp.Name()
-	// Best effort cleanup; renamed away on success.
 	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.WriteString(updated); err != nil {
@@ -61,21 +53,15 @@ func writeAtomicReplace(dir, realPath, updated string, mode os.FileMode) error {
 	return nil
 }
 
-// EditFile applies one exact oldString -> newString replacement to the file at
-// realPath (already resolved and approved by EditFilePolicy) and returns a
-// deterministic info string built only from what was actually read and written.
-// When doAppend is true oldString is ignored and newString is appended
-// byte-for-byte to the end of the file instead.
-// The model's own description of the change is never used for facts.
+// EditFile applies one exact oldString replacement, or appends newString when
+// doAppend is true. The result is built only from what was actually read and
+// written; the model's description is never used as fact.
 func EditFile(realPath, oldString, newString string, doAppend bool) (string, error) {
 	dir := filepath.Dir(realPath)
 	base := filepath.Base(realPath)
 
-	// Cross-process mutual exclusion via a persistent sidecar lockfile. A
-	// lock on realPath itself would stay on the old inode after the atomic
-	// Rename below, so concurrent editors could each hold a lock on a
-	// different inode. The sidecar survives renames because it is never
-	// renamed. All read-modify-write work happens while LOCK_EX is held.
+	// Lock a sidecar file, not realPath: the atomic rename would leave a lock
+	// on the old inode. All read-modify-write work runs under LOCK_EX.
 	lockPath := filepath.Join(dir, "."+base+".lock")
 	lockedfile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -122,9 +108,8 @@ func EditFile(realPath, oldString, newString string, doAppend bool) (string, err
 	if doAppend {
 		updated := appendContent(content, newString)
 		newLines := countEditLines(newString)
-		// Display-only start line for the appended range: a trailing
-		// newline (or empty file) means appending starts on a fresh line,
-		// otherwise it continues mid-last-line.
+		// Display-only start line: append starts on a fresh line after a
+		// trailing newline, otherwise mid-line.
 		startLine := countEditLines(content) + 1
 		if content != "" && !strings.HasSuffix(content, "\n") {
 			startLine = countEditLines(content)
@@ -158,8 +143,7 @@ func EditFile(realPath, oldString, newString string, doAppend bool) (string, err
 	return FormatEditResult(realPath, dir, base, startLine, endLine, newLines, len(data), len(updated), oldString, newString), nil
 }
 
-// FormatEditResult builds the deterministic harness reply for a passing edit.
-// Stable EDIT_OK prefix keeps future TUI parsing to a HasPrefix check.
+// FormatEditResult builds the deterministic EDIT_OK reply.
 func FormatEditResult(realPath, dir, file string, startLine, endLine, newLines, bytesBefore, bytesAfter int, oldString, newString string) string {
 	oldPreview, oldTruncated := truncatePreview(oldString)
 	newPreview, newTruncated := truncatePreview(newString)
@@ -185,9 +169,7 @@ func truncatePreview(s string) (string, bool) {
 	return s, false
 }
 
-// countEditLines counts the lines s spans: a trailing newline does not start
-// another line ("a\nb\n" is 2 lines, "" is 0). Display-only; the splice itself
-// is byte-based.
+// countEditLines counts displayed lines; a trailing newline does not add one.
 func countEditLines(s string) int {
 	if s == "" {
 		return 0

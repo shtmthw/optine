@@ -26,18 +26,13 @@ var (
 	vLLMChatURL   = "http://localhost:8000/v1/chat/completions"
 )
 
-// A model that keeps asking for tools instead of answering gets cut off here
-// rather than looping forever. Exported because sessions build the envelope
-// prompt from the same budget.
+// MaxTurns caps the number of inference calls in one run.
 const MaxTurns = 55
 
-// baseTurns is the starting turn budget. Every tool round and every malformed
-// retry grants one more turn, up to MaxTurns, so a long tool chain gets room
-// without letting a stuck model loop forever.
+// baseTurns is the starting turn budget.
 const baseTurns = 10
 
-// extendTurns grants one turn of headroom while keeping MaxTurns as the hard
-// ceiling.
+// extendTurns grants one extra turn without exceeding MaxTurns.
 func extendTurns(turns int) int {
 	if turns < MaxTurns {
 		return turns + 1
@@ -46,20 +41,12 @@ func extendTurns(turns int) int {
 	return turns
 }
 
-// maxBadBodies bounds same-history retries when a provider answers with a
-// body that is not usable JSON. One bad body is usually a transient truncated
-// stream, so a couple of retries are worth it; past the budget the run aborts
-// instead of burning turns on confusion.
+// maxBadBodies bounds retries after malformed provider responses.
 const maxBadBodies = 5
 
-// malformedRetryNotice is the whole correction: short on purpose, so the
-// garbage body never enters history and costs zero future context.
 const malformedRetryNotice = "Your last reply wasn't usable JSON — re-issue your previous turn, exactly as before."
 
 // handleMalformedBody records one malformed provider body against budget.
-// A non-empty correction means the loop should append it as a user message
-// and continue; a non-nil abort means the budget is spent and the loop
-// should return it.
 func handleMalformedBody(badBodies *int, err error) (correction string, abort error) {
 	*badBodies++
 	if *badBodies > maxBadBodies {
@@ -78,13 +65,7 @@ var providerHTTPClient = &http.Client{
 	Timeout: 999 * time.Second,
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-// nativeToolAgentCall runs the agent loop on the chosen provider. Picking a
-// provider is also picking a model and an inference server, so a whole run
-// stays on one of the two loops below.
+// nativeToolAgentCall dispatches to the loop for the selected provider.
 func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
 	switch provider {
 	case "Ollama":
@@ -98,13 +79,6 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 	}
 }
 
-// ---------------------------------------------------------------------------
-// The two agent loops
-//
-// Each keeps its history in its own server's message type, so history is
-// replayed exactly as the server sent it and never translated between formats.
-// ---------------------------------------------------------------------------
-
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
 	history := sess.Ollama()
 	turns := baseTurns
@@ -112,7 +86,6 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
 
-		//the inference call
 		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
@@ -132,23 +105,17 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 		reply := &response.Message
 
-		// A tool-calling turn carries empty content, so tool calls have to be
-		// checked before treating empty content as an error.
 		if len(reply.ToolCalls) == 0 {
 			if strings.TrimSpace(reply.Content) == "" {
 				return "", ErrEmptyFinalAnswer
 			}
 
-			// The answer is part of the conversation too: append it before
-			// returning, otherwise the session file would only ever hold the
-			// user's side of the transcript.
+			// Persist the final answer too.
 			*history = append(*history, reply)
 			return reply.Content, nil
 		}
 
-		// Run every tool before touching history, then append the assistant
-		// message and all results as one block. No exit path can leave a
-		// tool-call message without its tool results.
+		// Append the tool request and all results as one block.
 		results := make([]string, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
@@ -202,9 +169,7 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 
 		reply := &response.Choices[0].Message
 
-		// vLLM sends tool-call arguments as a JSON string. Decode them all
-		// before running any tool, so one malformed call stops the run before
-		// anything executes. History keeps the message as sent.
+		// vLLM sends tool-call arguments as a JSON string.
 		arguments := make([]map[string]any, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
@@ -221,17 +186,13 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 				return "", ErrEmptyFinalAnswer
 			}
 
-			// The answer is part of the conversation too: append it before
-			// returning, otherwise the session file would only ever hold the
-			// user's side of the transcript.
+			// Persist the final answer too.
 			*history = append(*history, reply)
 
 			return reply.Content, nil
 		}
 
-		// Run every tool before touching history, then append the assistant
-		// message and all results as one block. No exit path can leave a
-		// tool-call message without its tool results.
+		// Append the tool request and all results as one block.
 		results := make([]string, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
@@ -256,8 +217,7 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 	return "", ErrMaxInferenceCalls
 }
 
-// nativeTools is the one list of tools the agent advertises, so the request
-// body and the unknown-tool guard can never drift apart.
+// nativeTools is the single list of advertised tools.
 func nativeTools() []dataTypes.NativeTypeTool {
 	return []dataTypes.NativeTypeTool{dataTypes.WebSearch, dataTypes.ReadFile, dataTypes.Bash, dataTypes.EditFile, dataTypes.WriteFile}
 }
@@ -272,8 +232,7 @@ func isNativeTool(name string) bool {
 	return false
 }
 
-// runTool dispatches one tool call and turns any failure into text the model can
-// read, so a single bad call does not end the turn.
+// runTool dispatches a tool call and returns failures as text for the model.
 func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments map[string]any) string {
 	if !isNativeTool(name) {
 		return fmt.Sprintf("unknown tool %q requested", name)
@@ -291,8 +250,7 @@ func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments m
 	return result
 }
 
-// decodeVLLMArguments unwraps the JSON string vLLM sends for tool call
-// arguments back into the map the dispatcher expects.
+// decodeVLLMArguments decodes vLLM's JSON-string tool arguments.
 func decodeVLLMArguments(raw string) (map[string]any, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
@@ -306,10 +264,6 @@ func decodeVLLMArguments(raw string) (map[string]any, error) {
 
 	return arguments, nil
 }
-
-// ---------------------------------------------------------------------------
-// Requests
-// ---------------------------------------------------------------------------
 
 func produceOllamaReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName string) dataTypes.NativeToolChatRequest {
 	return dataTypes.NativeToolChatRequest{
@@ -327,14 +281,12 @@ func produceVLLMReqBody(messages []*dataTypes.VLLMTooltypeMessage, modelName str
 		Stream:   false,
 		Tools:    nativeTools(),
 
-		// vLLM defaults tool_choice to "none", which silently disables tool
-		// calling, so this has to be sent as "auto" on every request.
+		// vLLM defaults tool_choice to "none", so send "auto" explicitly.
 		ToolChoice: "auto",
 	}
 }
 
-// postJSON is the HTTP plumbing shared by every provider call in this package:
-// send the payload and decode the body into out.
+// postJSON posts payload as JSON and decodes the response into out.
 func postJSON(ctx context.Context, providerURL string, payload any, out any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {

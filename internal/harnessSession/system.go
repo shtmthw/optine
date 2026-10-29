@@ -11,11 +11,7 @@ import (
 )
 
 // systemCache keeps the system message next to the snapshot it was built from.
-//
-// Every run re-reads casual memory and crawler availability; the prompt is
-// only rebuilt when one of those inputs actually changed, so an unchanged
-// memory file costs one read and zero prompt churn. This is what makes user
-// edits to the notebook visible on the very next message.
+// The prompt is rebuilt only when memory or crawler availability changes.
 type systemCache struct {
 	kind       Kind
 	promptTime time.Time
@@ -43,9 +39,9 @@ func newSystemCache(kind Kind, maxTurns int) systemCache {
 		maxTurns:   maxTurns,
 	}
 
-	c.refreshBase()          //refresh and builds the system prompt and the web crawlers
-	c.refreshMemory()        //refreshes the casual memory file and sets the data and the path to it in c
-	c.injected = c.compose() //compiles the base with the memory, crawlers etc and returns a ready to use final sysprompt
+	c.refreshBase()
+	c.refreshMemory()
+	c.injected = c.compose()
 
 	return c
 }
@@ -69,9 +65,7 @@ func (c *systemCache) refreshBase() {
 	c.crawlerStamp = crawlerStamp(crawlers)
 }
 
-// refreshMemory reads the notebook. A failure keeps the previous snapshot so
-// the model keeps its last known memory instead of losing it mid-session.
-// Best-effort by design: memory problems never abort a run.
+// refreshMemory reads the notebook. A failure keeps the previous snapshot.
 func (c *systemCache) refreshMemory() bool {
 	path, err := casualMemoryPath()
 	if err != nil {
@@ -103,9 +97,8 @@ func (c *systemCache) compose() string {
 	return systemPrompts.WithCasualMemory(c.base, c.memoryPath, c.memoryData)
 }
 
-// SyncSystem re-reads the notebook and crawler availability and rebuilds the
-// system message in place only when the contents actually changed. It reports
-// whether the injected system message changed.
+// SyncSystem re-reads memory and crawler availability, rebuilding the system
+// message only when the contents changed.
 func (s *Session) SyncSystem() bool {
 	c := &s.SystemCache
 
@@ -122,7 +115,6 @@ func (s *Session) SyncSystem() bool {
 
 	next := c.compose()
 
-	// Defensive action; the changed being true should already dictate the c.Injected ( fully built sys prompt ) is not the same anymore.
 	if next == c.injected {
 		return false
 	}

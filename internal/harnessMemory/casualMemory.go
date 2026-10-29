@@ -9,6 +9,7 @@ import (
 	"github.com/mattthew/optine/internal/harnessPermissions"
 )
 
+// CasualMemoryPath returns the memory file path, creating the config dir.
 func CasualMemoryPath() (string, error) {
 	if harnessPermissions.AuthPath == "" {
 		return "", errors.New("optine config dir unavailable, AuthPath was never resolved")
@@ -22,10 +23,6 @@ func CasualMemoryPath() (string, error) {
 
 	return filepath.Join(dir, "casualMemory.md"), nil
 }
-
-// CasualMemoryPath returns the absolute path of the casual memory file,
-// creating the config dir if needed. Exported so prompts can name the exact
-// file the model is allowed to edit.
 
 func loadCasualMemoryFile() (*os.File, error) {
 	path, err := CasualMemoryPath()
@@ -58,6 +55,7 @@ func loadCasualMemoryFile() (*os.File, error) {
 	return file, nil
 }
 
+// ReadCasualMemoryFile returns the contents of the memory file.
 func ReadCasualMemoryFile() (string, error) {
 	file, err := loadCasualMemoryFile()
 

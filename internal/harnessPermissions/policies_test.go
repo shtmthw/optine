@@ -13,8 +13,6 @@ func answerReader(answer string) *bufio.Reader {
 	return bufio.NewReader(strings.NewReader(answer + "\n"))
 }
 
-// ---------------------------------------------------------------- read_file
-
 func TestReadFilePolicyApprovedOnceWhenDenied(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
@@ -76,8 +74,6 @@ func TestReadFilePolicyMissingFileErrors(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- write_file
-
 func TestWriteFilePolicyCreatesAndRejectsExisting(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "new.txt")
@@ -133,8 +129,6 @@ func TestWriteFilePolicyContentRequiredAndBounded(t *testing.T) {
 		t.Fatal("over-limit content should error")
 	}
 }
-
-// ---------------------------------------------------------------- edit_file
 
 func TestEditFilePolicyRequiresExistingFile(t *testing.T) {
 	dir := t.TempDir()
@@ -200,8 +194,6 @@ func TestEditAppendFlag(t *testing.T) {
 		t.Fatal("append=true should be true")
 	}
 }
-
-// ---------------------------------------------------------------- audit
 
 func TestWriteAuditAppendsJSONL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")

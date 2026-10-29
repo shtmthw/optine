@@ -8,10 +8,8 @@ import (
 
 var cliSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// withSpinner runs fn while showing a transient status line on stderr. Loading
-// a model can take minutes with no output from Ollama, so this is the only
-// progress signal. When stderr is not a terminal it prints one plain line
-// instead of animation and escape codes.
+// withSpinner shows a status line while fn runs. Without a terminal it
+// prints one plain line instead.
 func withSpinner(label string, fn func() error) error {
 	if !stderrIsTerminal() {
 		fmt.Fprintln(os.Stderr, label)

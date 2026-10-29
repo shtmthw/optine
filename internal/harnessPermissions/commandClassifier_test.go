@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------- helpers
-
 func mustResolve(t *testing.T, dir, p string) string {
 	t.Helper()
 	rp, err := resolvePath(dir, p)
@@ -37,8 +35,6 @@ func mustClassify(t *testing.T, cmd, dir string) []Action {
 	}
 	return acts
 }
-
-// ---------------------------------------------------------------- classes
 
 func TestClassifySimpleCommandClasses(t *testing.T) {
 	dir := t.TempDir()
@@ -79,8 +75,6 @@ func TestClassifySimpleCommandClasses(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------- paths
 
 func TestClassifyResolvesArgumentPaths(t *testing.T) {
 	dir := t.TempDir()
@@ -131,8 +125,6 @@ func TestClassifyQuotedAndHomeWords(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- redirects
-
 func TestClassifyRedirects(t *testing.T) {
 	dir := t.TempDir()
 
@@ -171,8 +163,6 @@ func TestClassifyRedirects(t *testing.T) {
 		t.Fatalf("want %q, got %+v", want, acts[0].Paths)
 	}
 }
-
-// ---------------------------------------------------------------- chaining
 
 func TestClassifyCdTracksDir(t *testing.T) {
 	dir := t.TempDir()
@@ -216,8 +206,6 @@ func TestClassifyFindFlagsBumpClass(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- globs
-
 func TestClassifyGlobResolvesToParentDir(t *testing.T) {
 	dir := t.TempDir()
 	build := filepath.Join(dir, "build")
@@ -236,8 +224,6 @@ func TestClassifyGlobResolvesToParentDir(t *testing.T) {
 		t.Fatalf("bare glob should resolve to the cwd, got %+v", acts[0].Paths)
 	}
 }
-
-// ---------------------------------------------------------------- rejections
 
 func TestClassifyRejectsUnanalyzableCommands(t *testing.T) {
 	dir := t.TempDir()
@@ -269,8 +255,6 @@ func TestClassifyCdRejections(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------- path helpers
 
 func TestResolvePathFollowsSymlinkAndRejectsDangling(t *testing.T) {
 	dir := t.TempDir()
@@ -349,8 +333,6 @@ func TestIsSensitive(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------- policy
 
 func TestPolicyForAction(t *testing.T) {
 	root := "/root/ws"

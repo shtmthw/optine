@@ -1,9 +1,7 @@
 package dataTypes
 
 type NativeTypeToolCall struct {
-	// Ollama sends an id here and ignores it on the way back in. It is kept
-	// because OpenAI-compatible servers reject a "tool" reply that has no
-	// id to match against.
+	// Kept because OpenAI-compatible servers require an id on tool replies.
 	ID       string `json:"id,omitempty"`
 	Function struct {
 		Name      string         `json:"name"`
@@ -45,21 +43,17 @@ type NativeToolChatRequest struct {
 	Messages []*NativeTooltypeMessage `json:"messages"`
 	Stream   bool                     `json:"stream"`
 	Tools    []NativeTypeTool         `json:"tools,omitempty"`
-	// No Format field here on purpose — do not combine Tools with
-	// Format:"json", gpt-oss can drop content entirely if you do.
+	// Do not combine Tools with Format:"json"; gpt-oss can drop content.
 }
 
 type NativeToolChatResponse struct {
 	Message NativeTooltypeMessage `json:"message"`
-	// PromptEvalCount is how many tokens Ollama evaluated for the prompt. Kept
-	// as session telemetry (a future context-budget feature will need it).
+	// PromptEvalCount is Ollama's measured prompt size.
 	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
 }
 
-// Everything below is the OpenAI-compatible shape that vLLM serves on
-// /v1/chat/completions. It cannot reuse the types above because the response is
-// wrapped in a "choices" array and tool call arguments are a JSON-encoded
-// string rather than an object. Mixing the two shapes up fails to decode.
+// OpenAI-compatible shapes served by vLLM. They differ from the Ollama types:
+// responses are wrapped in "choices" and tool arguments are JSON strings.
 
 // VLLMTypeToolCall is the OpenAI-style counterpart of NativeTypeToolCall.
 type VLLMTypeToolCall struct {
@@ -84,8 +78,7 @@ type VLLMNChatRequest struct {
 	Messages []*VLLMTooltypeMessage `json:"messages"`
 	Stream   bool                   `json:"stream"`
 	Tools    []NativeTypeTool       `json:"tools,omitempty"`
-	// vLLM defaults tool_choice to "none", which silently disables tool
-	// calling, so this has to be sent as "auto" on every request.
+	// vLLM defaults tool_choice to "none", so send "auto" explicitly.
 	ToolChoice string `json:"tool_choice,omitempty"`
 }
 

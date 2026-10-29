@@ -5,21 +5,15 @@ import (
 	"strings"
 )
 
-// MaxCasualMemoryChars caps injected memory so an unbounded memory file
-// cannot eat the context window on every run.
+// MaxCasualMemoryChars caps injected memory so it cannot eat the context window.
 const MaxCasualMemoryChars = 4000
 
-// MaxCasualMemoryBytes is the soft budget for the memory file itself. Past
-// it the section turns into a compaction notice instead of the full content
-// (soft enforcement: writes are never rejected, the model is told to compact).
+// MaxCasualMemoryBytes is the soft budget for the memory file. Past it the
+// section becomes a compaction notice; writes are never rejected.
 const MaxCasualMemoryBytes = 750 * 1024
 
-// WithCasualMemory appends the long-term memory section to base. memoryPath
-// is printed literally so the model knows exactly which file it may edit.
-// Past MaxCasualMemoryBytes the section turns into a compaction notice
-// instead of the full content (soft enforcement: writes are never rejected,
-// the model is told to compact). An empty memory still renders so the model
-// knows the file exists and is writable.
+// WithCasualMemory appends the memory section to base. An empty file still
+// renders so the model knows the path exists and is writable.
 func WithCasualMemory(base, memoryPath, memoryData string) string {
 	overBudget := len(memoryData) > MaxCasualMemoryBytes
 

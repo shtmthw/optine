@@ -47,7 +47,6 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 			return false
 		}
 		log.Println("starting /local execution")
-		// the provider selection
 		if err := selectProvider(reader); err != nil {
 			log.Println("RunCommand error: ", err)
 		}
@@ -59,7 +58,6 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 			return false
 		}
 		log.Println("starting /connect execution")
-		// the provider selection
 		if err := selectConnection(reader); err != nil {
 			log.Println("RunCommand error: ", err)
 		}
@@ -84,7 +82,7 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		availableSess, listErr := harnessSession.List(cwd, true)
 
 		if listErr != nil {
-			log.Printf("error occurred while list the available sessions, err: %v", listErr)
+			log.Printf("error occurred while listing the available sessions, err: %v", listErr)
 			return false
 		}
 
@@ -107,8 +105,7 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 
 		log.Println("Resuming the last session related to this directory...")
 
-		//run the last sess resumer based on workdir
-		if err := runAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID); err != nil {
+		if err := runAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID, true); err != nil {
 			log.Printf("error occurred while trying to initiate the agent, err: %v", err)
 			return false
 		}

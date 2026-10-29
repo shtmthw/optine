@@ -17,8 +17,7 @@ import (
 
 var ErrToolCallRejection = errors.New("the tool call request has been rejected")
 
-// allowList remembers tools the user approved with "always" for this session.
-// Answers are harnessPermissions.Answer values (No/Once/Remember).
+// allowList remembers tools approved with "always" for this session.
 var allowList = make(map[string]struct{})
 
 func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeLLMResponse) (string, error) {
@@ -36,11 +35,9 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 
 		switch resp {
 		case harnessPermissions.Once:
-			// allow once
 			return dispatchWebSearch(ctx, call)
 
 		case harnessPermissions.Remember:
-			// always allow this tool
 			allowList["web_search"] = struct{}{}
 			return dispatchWebSearch(ctx, call)
 
@@ -48,8 +45,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			return "User has rejected the tool call request.", ErrToolCallRejection
 		}
 	case "read_file":
-		// The line window is validated before the path is approved, so a
-		// malformed range fails without prompting the user.
+		// Validate the range before prompting.
 		startLine, endLine, err := harnessTools.ReadFileArgs(call.Arguments)
 		if err != nil {
 			log.Println(err)
@@ -65,12 +61,8 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		return harnessTools.ReadFile(realPath, startLine, endLine)
 
 	case "edit_file":
-		// Policy resolves and approves the path (cwd pre-approved, other
-		// dirs ask once, sensitive/symlink/hardlink always ask); execution
-		// does one exact old->new replacement (or a byte-for-byte append
-		// when the optional "append" argument is true) and returns a
-		// deterministic harness reply built from what was actually read
-		// and written.
+		// Policy resolves and approves the target; execution performs one
+		// exact replacement (or a byte-for-byte append).
 		doAppend := harnessPermissions.EditAppendFlag(call.Arguments)
 		realPath, oldString, newString, err := harnessPermissions.EditFilePolicy(call.Arguments, reader, doAppend)
 		if err != nil {
@@ -89,9 +81,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		return info, nil
 
 	case "write_file":
-		// Policy resolves and approves the target (create-only, symlinks
-		// are a hard deny, sensitive always asks); execution creates parents
-		// and writes atomically, returning a deterministic harness reply.
+		// Policy resolves and approves a create-only target.
 		realPath, content, err := harnessPermissions.WriteFilePolicy(call.Arguments, reader)
 		if err != nil {
 			log.Println(err)
@@ -109,13 +99,8 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		return info, nil
 
 	case "bash":
-		// The dispatcher speaks map[string]any; the bash tool speaks
-		// json.RawMessage (see decodeBashArgs). Re-encode here so both
-		// native (Ollama map, vLLM JSON string -> map) and non-native
-		// envelope paths funnel through the same classify -> policy ->
-		// ask -> audit -> exec pipeline. BashOutcome.Text already holds
-		// the denied / not-run / output text for the model, so a denial
-		// is a successful dispatch with explanatory text, not an error.
+		// The bash tool takes json.RawMessage, so re-encode the dispatcher's
+		// map. Denials are returned as tool text, not errors.
 		raw, err := json.Marshal(call.Arguments)
 		if err != nil {
 			return "", fmt.Errorf("bash: encoding arguments: %w", err)
@@ -139,10 +124,7 @@ func fileDenyBy(err error) string {
 	return "policy"
 }
 
-// auditFileTool appends one JSONL record per edit_file/write_file decision to
-// the same audit file bash uses. Best-effort only: unlike bash (fail-closed
-// before exec), the mutation or denial is already decided here, so an
-// unwritable log is reported, not fatal.
+// auditFileTool appends one JSONL record per file-tool decision.
 func auditFileTool(tool string, args map[string]any, realPath, dir, decision, by, reason string) {
 	auditPath, err := harnessPermissions.DefaultAuditPath()
 	if err != nil {
@@ -169,9 +151,7 @@ func auditFileTool(tool string, args map[string]any, realPath, dir, decision, by
 	}
 }
 
-// logFileToolResult feeds the deterministic harness reply to the TUI event
-// feed. Sensitive files log metadata only so secrets never reach logs; the
-// model still receives the full text as the tool result.
+// logFileToolResult logs the tool result, hiding sensitive file contents.
 func logFileToolResult(tool, realPath, info string) {
 	if harnessPermissions.IsSensitive(realPath) {
 		log.Printf("%s %s: applied (content hidden: sensitive file)", tool, realPath)

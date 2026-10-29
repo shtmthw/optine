@@ -1,10 +1,3 @@
-// bash tool for Casual Mode:
-//
-//	LLM tool call JSON → decodeBashArgs → classifyCommand → bashPolicy
-//	  → (AskFunc) → audit → execBash → tool result text for the model
-//
-// Uses the package's own AskFunc / Answer (ask.go). No methods.
-// Linux/macOS only (process groups via syscall).
 package harnessPermissions
 
 import (
@@ -36,8 +29,7 @@ const (
 	Deny
 )
 
-// Grant is what Remember saves for bash: this exact argv, in this exact dir.
-// It is NOT "allow the bash tool", see the note in bashTool.
+// Grant is what Remember saves for bash: this exact argv in this exact dir.
 type Grant struct {
 	Argv string // argv joined with NUL
 	Dir  string
@@ -61,10 +53,8 @@ type BashOutcome struct {
 	Text string // goes back to the model as the tool result
 }
 
-// DefaultAuditPath derives the JSONL audit file's location from AuthPath,
-// the single resolved config path (see optineConfigDir.go). An empty
-// AuthPath means the config dir never resolved at startup: fail closed
-// rather than writing into the working directory (filepath.Dir("") is ".").
+// DefaultAuditPath derives the audit file from AuthPath, the single resolved
+// config path. An empty AuthPath means startup never resolved the dir.
 func DefaultAuditPath() (string, error) {
 	if AuthPath == "" {
 		return "", fmt.Errorf("optine config dir unavailable, AuthPath was never resolved")
@@ -76,8 +66,8 @@ func DefaultAuditPath() (string, error) {
 	return filepath.Join(dir, "audit.jsonl"), nil
 }
 
-// newBashSession sets Root: from rootArg, or from the current directory when
-// rootArg is "". Called once (by BashTool), never from the model.
+// NewBashSession resolves the workspace root from rootArg, or from the current
+// directory when rootArg is empty. It is called once by BashTool.
 func NewBashSession(rootArg, auditPath string) (*BashSession, error) {
 	if rootArg == "" {
 		wd, err := os.Getwd()
@@ -92,7 +82,7 @@ func NewBashSession(rootArg, auditPath string) (*BashSession, error) {
 	}
 
 	// ~ and the workspace are different things. If home is inside the root
-	// (root is "/", "/home" or home itself) everything in home counts as "inside".
+	// (root is "/", "/home" or home itself) everything in home counts as inside.
 	home, err := resolvePath(homeDir, ".")
 	if err != nil {
 		return nil, err
@@ -102,8 +92,6 @@ func NewBashSession(rootArg, auditPath string) (*BashSession, error) {
 	}
 	return &BashSession{Root: root, AuditPath: auditPath}, nil
 }
-
-// ---------------------------------------------------------------- policy
 
 // bashPolicy returns the strictest decision over all actions.
 func BashPolicy(actions []Action, root string, grants []Grant) (Decision, string) {
@@ -144,7 +132,7 @@ func PolicyForAction(a Action, root string) (Decision, string) {
 	if a.Class&Exec != 0 {
 		return Ask, "runs a program whose effects can't be checked"
 	}
-	return Allow, "" // reads and writes inside the workspace
+	return Allow, ""
 }
 
 func HasGrant(grants []Grant, a Action) bool {
@@ -160,7 +148,7 @@ func HasGrant(grants []Grant, a Action) bool {
 	return false
 }
 
-// insideRoot: root and p must both be resolved already.
+// InsideRoot reports whether p is inside root. Both paths must be resolved.
 func InsideRoot(root, p string) bool {
 	rel, err := filepath.Rel(root, p)
 	if err != nil {
@@ -169,8 +157,8 @@ func InsideRoot(root, p string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// isSensitive is a small deny list. In Casual Mode it only covers what the
-// classifier can see, python -c "open('~/.ssh/id_rsa')" still gets past it.
+// IsSensitive reports whether p is on the sensitive-path deny list. This is a
+// small static check; a command that opens the path itself can evade it.
 func IsSensitive(p string) bool {
 	for _, elem := range strings.Split(p, string(filepath.Separator)) {
 		switch elem {
@@ -184,10 +172,7 @@ func IsSensitive(p string) bool {
 	return false
 }
 
-// ---------------------------------------------------------------- what AskFunc shows
-
-// bashArgsMap is the "arguments" AskFunc prints. The model's own description
-// is in here, so the user sees it as an argument the model sent.
+// BashArgsMap builds the argument map shown to the user.
 func BashArgsMap(args BashArgs) map[string]any {
 	m := map[string]any{"command": args.Command}
 	if args.Description != "" {
@@ -199,8 +184,7 @@ func BashArgsMap(args BashArgs) map[string]any {
 	return m
 }
 
-// askContent is our analysis, the `content` AskFunc prints: why we are asking,
-// and every command with the resolved absolute paths it touches.
+// AskContent describes why a command needs approval and which paths it touches.
 func AskContent(actions []Action, why string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "asked because it %s\n", why)
@@ -229,8 +213,6 @@ func ClassNames(c Class) string {
 	return strings.Join(names, "+")
 }
 
-// ---------------------------------------------------------------- audit
-
 type AuditRecord struct {
 	Time     string   `json:"time"`
 	Command  string   `json:"command"`
@@ -257,8 +239,6 @@ func WriteAudit(path string, rec AuditRecord) error {
 	return err
 }
 
-// ---------------------------------------------------------------- execution
-
 // execBash runs the command with bash -c (the same dialect the classifier
 // parsed), with a scrubbed env, no stdin, a timeout, and capped output.
 func ExecBash(command, dir string, timeout time.Duration) (string, int) {
@@ -268,7 +248,7 @@ func ExecBash(command, dir string, timeout time.Duration) (string, int) {
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = dir
 	cmd.Env = CleanEnv()
-	cmd.Stdin = nil // /dev/null
+	cmd.Stdin = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 
@@ -315,9 +295,8 @@ func ExecBash(command, dir string, timeout time.Duration) (string, int) {
 	return fmt.Sprintf("%s\n[exit code %d]", text, code), code
 }
 
-// cleanEnv passes only what a normal command needs, so API keys and tokens in
-// the harness's environment don't reach the model's commands. HOME stays real
-// so bash expands ~ to the same path the classifier used.
+// CleanEnv passes only the variables a normal command needs, keeping API keys
+// and tokens out of the model's commands. HOME stays real so ~ expands normally.
 func CleanEnv() []string {
 	var env []string
 	for _, k := range []string{"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "TMPDIR"} {
