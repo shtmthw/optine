@@ -1,2 +1,3 @@
-/testdata
-golden_test.go
+# Local golden transcript tests and fixtures.
+/golden_test.go
+/testdata/

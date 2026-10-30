@@ -9,8 +9,8 @@ import (
 )
 
 func benchmarkModel(messages int) Model {
-	m := goldenModel(100, 40)
-	body := markdownSample()
+	m := newTestModelAt(100, 40)
+	body := sampleMarkdown()
 
 	m.messages = make([]Message, 0, messages)
 	for i := 0; i < messages; i++ {

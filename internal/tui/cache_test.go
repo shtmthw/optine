@@ -25,34 +25,34 @@ func viewMatchesFreshRebuild(t *testing.T, m Model) {
 func TestRenderCacheMatchesFreshRebuild(t *testing.T) {
 	cases := map[string]func() Model{
 		"fresh": func() Model {
-			m := goldenModel(80, 24)
+			m := newTestModelAt(80, 24)
 			m.sessionUID = "SESS-1"
 			return m
 		},
 		"messages": func() Model {
-			m := goldenModel(80, 40)
-			return goldenMessages(m,
+			m := newTestModelAt(80, 40)
+			return modelWithMessages(m,
 				Message{Role: roleUser, Content: "hello"},
-				Message{Role: roleAgent, Content: markdownSample()},
+				Message{Role: roleAgent, Content: sampleMarkdown()},
 			)
 		},
 		"busy": func() Model {
-			m := goldenModel(80, 24)
-			m = goldenMessages(m, Message{Role: roleUser, Content: "hello"})
+			m := newTestModelAt(80, 24)
+			m = modelWithMessages(m, Message{Role: roleUser, Content: "hello"})
 			m.busy = true
 			m.spinnerFrame = 4
 			return m
 		},
 		"approval": func() Model {
-			m := goldenModel(80, 24)
-			m = goldenMessages(m, Message{Role: roleUser, Content: "hello"})
+			m := newTestModelAt(80, 24)
+			m = modelWithMessages(m, Message{Role: roleUser, Content: "hello"})
 			m.busy = true
 			m.pendingApproval = true
 			m.hovered = "a"
 			return m
 		},
 		"scrolled": func() Model {
-			m := goldenModel(40, 10)
+			m := newTestModelAt(40, 10)
 			for i := 0; i < 20; i++ {
 				m.messages = append(m.messages, Message{Role: roleUser, Content: "line"})
 			}
@@ -60,8 +60,8 @@ func TestRenderCacheMatchesFreshRebuild(t *testing.T) {
 			return m
 		},
 		"narrow": func() Model {
-			m := goldenModel(3, 3)
-			return goldenMessages(m, Message{Role: roleAgent, Content: "# h\n\nbody"})
+			m := newTestModelAt(3, 3)
+			return modelWithMessages(m, Message{Role: roleAgent, Content: "# h\n\nbody"})
 		},
 	}
 
@@ -73,15 +73,15 @@ func TestRenderCacheMatchesFreshRebuild(t *testing.T) {
 }
 
 func TestRenderCacheInvalidatesOnWidthChange(t *testing.T) {
-	m := goldenModel(80, 24)
-	m = goldenMessages(m, Message{Role: roleAgent, Content: markdownSample()})
+	m := newTestModelAt(80, 24)
+	m = modelWithMessages(m, Message{Role: roleAgent, Content: sampleMarkdown()})
 
 	_ = m.View()
 	m, _ = update(m, tea.WindowSizeMsg{Width: 40, Height: 24})
 	got := m.View()
 
-	fresh := goldenModel(40, 24)
-	fresh = goldenMessages(fresh, Message{Role: roleAgent, Content: markdownSample()})
+	fresh := newTestModelAt(40, 24)
+	fresh = modelWithMessages(fresh, Message{Role: roleAgent, Content: sampleMarkdown()})
 	if want := fresh.View(); got != want {
 		t.Fatalf("width change did not re-render\n--- got ---\n%s\n--- want ---\n%s",
 			escapeANSI(got), escapeANSI(want))
@@ -89,15 +89,15 @@ func TestRenderCacheInvalidatesOnWidthChange(t *testing.T) {
 }
 
 func TestRenderCacheInvalidatesOnAppend(t *testing.T) {
-	m := goldenModel(80, 24)
-	m = goldenMessages(m, Message{Role: roleUser, Content: "first"})
+	m := newTestModelAt(80, 24)
+	m = modelWithMessages(m, Message{Role: roleUser, Content: "first"})
 	_ = m.View()
 
 	m, _ = update(m, logLineMsg{text: "second"})
 	got := m.View()
 
-	fresh := goldenModel(80, 24)
-	fresh = goldenMessages(fresh,
+	fresh := newTestModelAt(80, 24)
+	fresh = modelWithMessages(fresh,
 		Message{Role: roleUser, Content: "first"},
 		Message{Role: roleEvent, Content: "second"},
 	)
@@ -108,8 +108,8 @@ func TestRenderCacheInvalidatesOnAppend(t *testing.T) {
 }
 
 func TestRenderCacheInvalidatesOnSwapWithSameCount(t *testing.T) {
-	m := goldenModel(80, 24)
-	m = goldenMessages(m, Message{Role: roleUser, Content: "old conversation"})
+	m := newTestModelAt(80, 24)
+	m = modelWithMessages(m, Message{Role: roleUser, Content: "old conversation"})
 	_ = m.View()
 
 	m, _ = update(m, agentFinishedMsg{swap: []Message{
@@ -126,7 +126,7 @@ func TestRenderCacheInvalidatesOnSwapWithSameCount(t *testing.T) {
 }
 
 func TestRenderCacheInvalidatesOnSessionChange(t *testing.T) {
-	m := goldenModel(80, 24)
+	m := newTestModelAt(80, 24)
 	m.sessionUID = "OLD"
 	_ = m.View()
 
@@ -142,8 +142,8 @@ func TestRenderCacheInvalidatesOnSessionChange(t *testing.T) {
 }
 
 func TestMouseClickUsesRenderedApprovalRow(t *testing.T) {
-	m := goldenModel(80, 24)
-	m = goldenMessages(m, Message{Role: roleUser, Content: "run the tests"})
+	m := newTestModelAt(80, 24)
+	m = modelWithMessages(m, Message{Role: roleUser, Content: "run the tests"})
 	m.busy = true
 	m.pendingApproval = true
 	m.clicks = &clickTargets{}
@@ -179,8 +179,8 @@ func TestMouseClickUsesRenderedApprovalRow(t *testing.T) {
 }
 
 func TestRenderCacheDoNotAccumulateDynamicLines(t *testing.T) {
-	m := goldenModel(80, 24)
-	m = goldenMessages(m, Message{Role: roleUser, Content: "hello"})
+	m := newTestModelAt(80, 24)
+	m = modelWithMessages(m, Message{Role: roleUser, Content: "hello"})
 	m.busy = true
 	m.spinnerFrame = 2
 
@@ -194,8 +194,8 @@ func TestRenderCacheDoNotAccumulateDynamicLines(t *testing.T) {
 	m.busy = false
 	withoutSpinner := m.View()
 
-	fresh := goldenModel(80, 24)
-	fresh = goldenMessages(fresh, Message{Role: roleUser, Content: "hello"})
+	fresh := newTestModelAt(80, 24)
+	fresh = modelWithMessages(fresh, Message{Role: roleUser, Content: "hello"})
 	if want := fresh.View(); withoutSpinner != want {
 		t.Fatalf("spinner leaked into the idle frame\n--- got ---\n%s\n--- want ---\n%s",
 			escapeANSI(withoutSpinner), escapeANSI(want))
