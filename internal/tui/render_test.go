@@ -94,7 +94,7 @@ func TestRenderAgentContentBlocks(t *testing.T) {
 
 	out := renderAgentContent(content, 60)
 	for _, want := range []string{"Heading", "a quote line", "para with", "func main()"} {
-		if !strings.Contains(out, want) {
+		if !strings.Contains(plainText(out), want) {
 			t.Fatalf("render missing %q:\n%s", want, out)
 		}
 	}

@@ -262,18 +262,39 @@ func isTableRow(line string) bool {
 
 // isDelimRow reports a |---|---| delimiter row.
 func isDelimRow(line string) bool {
+	_, ok := delimAlignments(line)
+	return ok
+}
+
+// parseDelimRow returns per-column alignment: 0 left, 1 center, 2 right.
+func parseDelimRow(line string) []int {
+	align, _ := delimAlignments(line)
+	return align
+}
+
+// delimAlignments validates a delimiter row once and returns its alignment
+// columns. isDelimRow and parseDelimRow both use it so the accepted syntax
+// cannot drift between the check and the renderer.
+func delimAlignments(line string) ([]int, bool) {
 	t := strings.TrimSpace(line)
 	if !strings.HasPrefix(t, "|") || !strings.HasSuffix(t, "|") {
-		return false
+		return nil, false
 	}
 	inner := strings.Trim(t, "|")
 	if strings.TrimSpace(inner) == "" {
-		return false
+		return nil, false
 	}
+
+	var align []int
+
 	for _, cell := range strings.Split(inner, "|") {
 		c := strings.TrimSpace(cell)
+
+		left := strings.HasPrefix(c, ":")
+		right := strings.HasSuffix(c, ":")
+
 		i := 0
-		if strings.HasPrefix(c, ":") {
+		if left {
 			i++
 		}
 		dashes := 0
@@ -283,19 +304,9 @@ func isDelimRow(line string) bool {
 		}
 		trail := c[i:]
 		if dashes == 0 || (trail != "" && trail != ":") {
-			return false
+			return nil, false
 		}
-	}
-	return true
-}
 
-// parseDelimRow returns per-column alignment: 0 left, 1 center, 2 right.
-func parseDelimRow(line string) []int {
-	inner := strings.Trim(strings.TrimSpace(line), "|")
-	var align []int
-	for _, cell := range strings.Split(inner, "|") {
-		c := strings.TrimSpace(cell)
-		left, right := strings.HasPrefix(c, ":"), strings.HasSuffix(c, ":")
 		switch {
 		case left && right:
 			align = append(align, 1)
@@ -305,7 +316,8 @@ func parseDelimRow(line string) []int {
 			align = append(align, 0)
 		}
 	}
-	return align
+
+	return align, true
 }
 
 // splitTableRow splits a row into cells, honoring \| escapes.

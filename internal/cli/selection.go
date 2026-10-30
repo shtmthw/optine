@@ -3,17 +3,19 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/mattthew/optine/internal/dataTypes"
 	"github.com/mattthew/optine/internal/harnessCore"
+	"github.com/mattthew/optine/internal/harnessPermissions"
 	"github.com/mattthew/optine/internal/harnessSession"
-	"github.com/mattthew/optine/internal/harnessSnapshotter"
 	"github.com/mattthew/optine/internal/provider"
 	"github.com/mattthew/optine/internal/tui"
 )
@@ -206,23 +208,11 @@ func selectProvider(reader *bufio.Reader) error {
 func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string, fromCLI bool) error {
 	// Tools run against the process working directory, so that is the
 	// session's Directory.
-	var sess *harnessSession.Session
-
 	CWD, wdErr := os.Getwd()
 	if wdErr != nil {
 		log.Printf("working directory unavailable: %v", wdErr)
 		CWD = "unknown"
 	}
-
-	sess = harnessSession.New(harnessSession.Config{
-		Provider:     providerName,
-		Model:        modelName,
-		Directory:    CWD,
-		Kind:         harnessSession.KindFor(providerName, nativeToolCalling),
-		ContextLimit: contextLimit,
-		MaxTurns:     harnessCore.MaxTurns,
-		GitStatus:    harnessSnapshotter.GitAvailable(),
-	})
 
 	agentConf := dataTypes.AgentConfig{
 		Provider:          providerName,
@@ -230,19 +220,26 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 		NativeToolCalling: nativeToolCalling,
 	}
 
-	var initialMessages []tui.Message
+	sess, err := sessionForRun(harnessSession.Config{
+		Provider:     providerName,
+		Model:        modelName,
+		Directory:    CWD,
+		Kind:         harnessSession.KindFor(providerName, nativeToolCalling),
+		ContextLimit: contextLimit,
+		MaxTurns:     harnessCore.MaxTurns,
+	}, sessionUidfromCli)
+	if err != nil {
+		return handleError(err)
+	}
 
+	var initialMessages []tui.Message
 	if strings.TrimSpace(sessionUidfromCli) != "" {
-		next, err := harnessSession.Load(sessionUidfromCli)
-		if err != nil {
-			return handleError(err)
-		}
-		sess = next
 		initialMessages = tui.TranscriptMessages(sess.Transcript())
 	}
 
 	log.Printf("session %s running (%s, %s) in %s", sess.UID, providerName, modelName, sess.Directory)
 
+	configDir := filepath.Dir(harnessPermissions.AuthPath)
 	agent := func(ctx context.Context, provider string, modelName string, msg string, r *bufio.Reader) (tui.AgentResult, error) {
 		msg = strings.TrimSpace(msg)
 
@@ -262,6 +259,37 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 			}
 
 			return tui.AgentResult{}, nil
+		}
+
+		// Only the latest message's files are reverted; multi-message reversion
+		// and transcript undo are not handled here.
+		if msg == "/revert" {
+
+			if sess.TotalUserMessages == 0 {
+				log.Println("Can not revert files in a session without messages.")
+				return tui.AgentResult{}, nil
+			}
+
+			revertedPaths, err := revertLatestSnapshot(sess, sess.Directory, configDir)
+			if err != nil {
+				if errors.Is(err, errNoRevertSnapshotPair) {
+					log.Println("No completed snapshot pair is available to revert.")
+				} else {
+					log.Printf("error occurred while trying to revert in %s, err: %v", sess.Directory, err)
+				}
+				return tui.AgentResult{}, nil
+			}
+
+			if len(revertedPaths) == 0 {
+				log.Println("No file changes were made, thus no files reverted.")
+			} else {
+				for _, revertedPath := range revertedPaths {
+					log.Printf("Reverted: %s", revertedPath)
+				}
+			}
+
+			return tui.AgentResult{}, nil
+
 		}
 
 		if strings.HasPrefix(msg, "/") {
@@ -299,7 +327,7 @@ func resumeSession(current *harnessSession.Session, arg string) (*harnessSession
 	}
 
 	if len(eligible) == 0 {
-		return nil, []string{"no other saved sessions for this provider and tool mode"}
+		return nil, []string{"no other saved sessions for this provider, tool mode and directory"}
 	}
 
 	if arg == "" {
@@ -310,10 +338,6 @@ func resumeSession(current *harnessSession.Session, arg string) (*harnessSession
 				"  %d. %s  %s  %d messages  saved %s",
 				i+1, meta.UID, meta.Model, meta.Messages, meta.UpdatedAt.Format("2006-01-02 15:04"),
 			)
-
-			if meta.Directory != "" && meta.Directory != current.Directory {
-				line += "  [" + meta.Directory + "]"
-			}
 
 			lines = append(lines, line)
 		}
@@ -343,10 +367,10 @@ func resumeSession(current *harnessSession.Session, arg string) (*harnessSession
 		case next.Directory == "":
 			next.Directory = current.Directory
 		case next.Directory != current.Directory:
-			lines = append(lines, fmt.Sprintf(
-				"session was started in %s; tools keep running in %s", next.Directory, current.Directory,
-			))
-			next.Directory = current.Directory
+			return nil, []string{fmt.Sprintf(
+				"session %s was started in %s; resume it from that directory",
+				next.UID, next.Directory,
+			)}
 		}
 
 		if harnessSession.OnActiveSession != nil {

@@ -3,7 +3,6 @@ package harnessPermissions
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,18 +36,6 @@ type Action struct {
 }
 
 var homeDir, _ = os.UserHomeDir()
-
-// cwd seeds the per-session approval maps in the file policies.
-var cwd, cwdErr = os.Getwd()
-
-// baseApprovedDirs pre-approves cwd, or nothing if cwd is unknown.
-func baseApprovedDirs() map[string]bool {
-	if cwdErr != nil {
-		log.Println("working directory unavailable, no directory is pre-approved:", cwdErr)
-		return map[string]bool{}
-	}
-	return map[string]bool{cwd: true}
-}
 
 type spec struct {
 	Class    Class

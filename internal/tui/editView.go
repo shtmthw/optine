@@ -25,27 +25,19 @@ var (
 			Italic(true).
 			Foreground(lipgloss.Color("99"))
 
-	editOldStyle = lipgloss.NewStyle().
+	editBodyBase = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("231")).
-			Background(lipgloss.Color("52")).
 			Padding(0, 1)
 
-	editNewStyle = lipgloss.NewStyle().
+	editTitleBase = lipgloss.NewStyle().
+			Bold(true).
 			Foreground(lipgloss.Color("231")).
-			Background(lipgloss.Color("22")).
 			Padding(0, 1)
 
-	editOldTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("231")).
-				Background(lipgloss.Color("52")).
-				Padding(0, 1)
-
-	editNewTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("231")).
-				Background(lipgloss.Color("22")).
-				Padding(0, 1)
+	editOldStyle      = editBodyBase.Background(lipgloss.Color("52"))
+	editNewStyle      = editBodyBase.Background(lipgloss.Color("22"))
+	editOldTitleStyle = editTitleBase.Background(lipgloss.Color("52"))
+	editNewTitleStyle = editTitleBase.Background(lipgloss.Color("22"))
 
 	editDividerStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("99"))
@@ -74,7 +66,6 @@ type editInfo struct {
 	footer      string
 }
 
-// parseEditInfo recognizes a harness EDIT_OK block. Second return is false
 // splitOKHeadline strips the "TAG " prefix from a deterministic harness
 // result line and pulls path/dir/file off the front, returning the
 // unconsumed rest for kind-specific parsing. Shared by both parsers.
@@ -107,6 +98,7 @@ func splitOKHeadline(line, tag string) (path, dir, file, rest string, ok bool) {
 	return path, dir, file, rest, true
 }
 
+// parseEditInfo recognizes a harness EDIT_OK block. Second return is false
 // when content is any other event text (falls back to plain event style).
 func parseEditInfo(content string) (*editInfo, bool) {
 	if !strings.HasPrefix(content, "EDIT_OK ") {
@@ -265,12 +257,7 @@ func renderEditColumns(info *editInfo, width int) string {
 		return renderEditStacked(info, width)
 	}
 
-	maxOld := info.endLine
-	maxNew := info.startLine + info.newCount - 1
-	if maxNew < info.startLine {
-		maxNew = info.startLine
-	}
-	lineNoW := len(strconv.Itoa(max(maxOld, maxNew)))
+	lineNoW := editLineNumberWidth(info)
 
 	oldRows := editPanelRows(info.oldText, info.startLine, lineNoW, colW-2, true)
 	newRows := editPanelRows(info.newText, info.startLine, lineNoW, colW-2, false)
@@ -306,12 +293,7 @@ func renderEditStacked(info *editInfo, width int) string {
 	if colW < 0 {
 		colW = 0
 	}
-	maxOld := info.endLine
-	maxNew := info.startLine + info.newCount - 1
-	if maxNew < info.startLine {
-		maxNew = info.startLine
-	}
-	lineNoW := len(strconv.Itoa(max(maxOld, maxNew)))
+	lineNoW := editLineNumberWidth(info)
 
 	contentW := colW - 2
 	if colW <= 0 {
@@ -320,40 +302,65 @@ func renderEditStacked(info *editInfo, width int) string {
 	oldRows := editPanelRows(info.oldText, info.startLine, lineNoW, contentW, true)
 	newRows := editPanelRows(info.newText, info.startLine, lineNoW, contentW, false)
 
-	var b strings.Builder
-	if colW > 0 {
-		b.WriteString(editOldTitleStyle.Width(colW).Render(fmt.Sprintf("— OLD  lines %d-%d", info.startLine, info.endLine)))
-		b.WriteString("\n")
-		b.WriteString(editOldStyle.Width(colW).Render(strings.Join(oldRows, "\n")))
-		b.WriteString("\n")
-		b.WriteString(editNewTitleStyle.Width(colW).Render(fmt.Sprintf("+ NEW  from line %d (%d lines)", info.startLine, info.newCount)))
-		b.WriteString("\n")
-		b.WriteString(editNewStyle.Width(colW).Render(strings.Join(newRows, "\n")))
-	} else {
-		b.WriteString(fmt.Sprintf("— OLD  lines %d-%d", info.startLine, info.endLine))
-		b.WriteString("\n")
-		b.WriteString(strings.Join(oldRows, "\n"))
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("+ NEW  from line %d (%d lines)", info.startLine, info.newCount))
-		b.WriteString("\n")
-		b.WriteString(strings.Join(newRows, "\n"))
+	oldPanel := renderTitledPanel(
+		fmt.Sprintf("— OLD  lines %d-%d", info.startLine, info.endLine),
+		oldRows, colW, editOldTitleStyle, editOldStyle,
+	)
+	newPanel := renderTitledPanel(
+		fmt.Sprintf("+ NEW  from line %d (%d lines)", info.startLine, info.newCount),
+		newRows, colW, editNewTitleStyle, editNewStyle,
+	)
+
+	return oldPanel + "\n" + newPanel
+}
+
+// renderTitledPanel stacks a styled title over a styled body. Width zero means
+// the terminal size is not known yet: both parts stay unstyled so the content
+// is not padded to a bogus width.
+func renderTitledPanel(title string, rows []string, width int, titleStyle, bodyStyle lipgloss.Style) string {
+	if width <= 0 {
+		return title + "\n" + strings.Join(rows, "\n")
 	}
-	return b.String()
+
+	return titleStyle.Width(width).Render(title) + "\n" +
+		bodyStyle.Width(width).Render(strings.Join(rows, "\n"))
+}
+
+// editLineNumberWidth is the gutter width shared by both edit layouts.
+func editLineNumberWidth(info *editInfo) int {
+	maxOld := info.endLine
+	maxNew := info.startLine + info.newCount - 1
+	if maxNew < info.startLine {
+		maxNew = info.startLine
+	}
+
+	return len(strconv.Itoa(max(maxOld, maxNew)))
 }
 
 // editPanelRows numbers each text line and truncates to fit the panel.
 // isOld=false with empty input means a pure deletion: show a placeholder.
 func editPanelRows(text []string, startLine, lineNoW, contentW int, isOld bool) []string {
+	empty := "(empty — block deleted)"
+	if isOld {
+		empty = ""
+	}
+
+	return panelRows(text, startLine, lineNoW, contentW, empty)
+}
+
+// panelRows is the shared numbered-row builder for edit and write panels.
+// An empty slice (or a single blank line) renders the caller's placeholder.
+func panelRows(text []string, firstLine, lineNoW, contentW int, empty string) []string {
 	if len(text) == 0 || (len(text) == 1 && strings.TrimSpace(text[0]) == "") {
-		if !isOld {
-			return []string{"(empty — block deleted)"}
+		if empty == "" {
+			return []string{""}
 		}
-		return []string{""}
+		return []string{empty}
 	}
 	rows := make([]string, 0, len(text))
 	for i, l := range text {
 		l = strings.ReplaceAll(l, "\t", "  ")
-		prefix := fmt.Sprintf("%*d │ ", lineNoW, startLine+i)
+		prefix := fmt.Sprintf("%*d │ ", lineNoW, firstLine+i)
 		if contentW > 0 {
 			avail := contentW - runeLen(prefix)
 			if avail < 1 {
@@ -470,19 +477,15 @@ func renderWriteInfo(info *writeInfo, width int) string {
 		contentW = 0 // no constraint before first WindowSizeMsg
 	}
 	rows := writePanelRows(info.text, lineNoW, contentW)
+	panel := renderTitledPanel(
+		fmt.Sprintf("+ NEW FILE  %d lines", info.lines),
+		rows, colW, editNewTitleStyle, editNewStyle,
+	)
 
 	var b strings.Builder
 	b.WriteString(header)
 	b.WriteString("\n")
-	if colW > 0 {
-		b.WriteString(editNewTitleStyle.Width(colW).Render(fmt.Sprintf("+ NEW FILE  %d lines", info.lines)))
-		b.WriteString("\n")
-		b.WriteString(editNewStyle.Width(colW).Render(strings.Join(rows, "\n")))
-	} else {
-		b.WriteString(fmt.Sprintf("+ NEW FILE  %d lines", info.lines))
-		b.WriteString("\n")
-		b.WriteString(strings.Join(rows, "\n"))
-	}
+	b.WriteString(panel)
 	b.WriteString("\n")
 	b.WriteString(footer)
 	return b.String()
@@ -490,36 +493,5 @@ func renderWriteInfo(info *writeInfo, width int) string {
 
 // writePanelRows numbers content lines from 1. Empty file shows a placeholder.
 func writePanelRows(text []string, lineNoW, contentW int) []string {
-	if len(text) == 0 || (len(text) == 1 && strings.TrimSpace(text[0]) == "") {
-		return []string{"(empty file)"}
-	}
-	rows := make([]string, 0, len(text))
-	for i, l := range text {
-		l = strings.ReplaceAll(l, "\t", "  ")
-		prefix := fmt.Sprintf("%*d │ ", lineNoW, i+1)
-		if contentW > 0 {
-			avail := contentW - runeLen(prefix)
-			if avail < 1 {
-				avail = 1
-			}
-			l = truncateRunes(l, avail)
-		}
-		rows = append(rows, prefix+l)
-	}
-	return rows
-}
-
-func runeLen(s string) int {
-	return len([]rune(s))
-}
-
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 1 {
-		return string(r[:n])
-	}
-	return string(r[:n-1]) + "…"
+	return panelRows(text, 1, lineNoW, contentW, "(empty file)")
 }

@@ -97,20 +97,20 @@ func parseInline(s string) []textRun {
 	for len(s) > 0 {
 		iTick, tickOK := -1, false
 		if i := strings.Index(s, "`"); i >= 0 {
-			if strings.Index(s[i+1:], "`") >= 0 {
+			if strings.Contains(s[i+1:], "`") {
 				iTick, tickOK = i, true
 			}
 		}
 		iBold, boldOK := -1, false
 		if i := strings.Index(s, "**"); i >= 0 {
-			if strings.Index(s[i+2:], "**") >= 0 {
+			if strings.Contains(s[i+2:], "**") {
 				iBold, boldOK = i, true
 			}
 		}
 		iStar, starOK := -1, false
 		for i := strings.Index(s, "*"); i >= 0; {
 			if !strings.HasPrefix(s[i:], "**") {
-				if strings.Index(s[i+1:], "*") >= 0 {
+				if strings.Contains(s[i+1:], "*") {
 					iStar, starOK = i, true
 				}
 				break
@@ -233,13 +233,13 @@ func wrapRuns(runs []textRun, width int) [][]styledWord {
 func mergeInline(base lipgloss.Style, rn textRun) lipgloss.Style {
 	s := base
 	if rn.bold {
-		s = s.Copy().Bold(true)
+		s = s.Bold(true)
 	}
 	if rn.italic {
-		s = s.Copy().Italic(true)
+		s = s.Italic(true)
 	}
 	if rn.code {
-		s = s.Copy().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("237"))
+		s = s.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("237"))
 	}
 	return s
 }

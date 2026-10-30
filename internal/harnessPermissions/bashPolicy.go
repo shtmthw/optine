@@ -115,13 +115,17 @@ func PolicyForAction(a Action, root string) (Decision, string) {
 			return Deny, "touches a sensitive path: " + p.Path
 		}
 	}
-	if !InsideRoot(root, a.Dir) {
-		return Ask, "runs in " + a.Dir + ", outside the workspace"
+
+	// The cwd tree stays trusted dynamically; approvedDirs adds directories
+	// approved by "always" and the app config dir.
+	if !InsideRoot(root, a.Dir) && !approvedDirs[a.Dir] {
+		return Ask, "runs in " + a.Dir + ", outside approved directories"
 	}
 	for _, p := range a.Paths {
-		if !InsideRoot(root, p.Path) {
-			return Ask, "touches " + p.Path + ", outside the workspace"
+		if InsideRoot(root, p.Path) || approvedPath(p.Path) {
+			continue
 		}
+		return Ask, "touches " + p.Path + ", outside approved directories"
 	}
 	if a.Class&Delete != 0 {
 		return Ask, "deletes or overwrites files"

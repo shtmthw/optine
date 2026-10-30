@@ -32,11 +32,7 @@ func tailMessages(messages []Message) []Message {
 	start := len(messages)
 	size := 0
 
-	for start > 0 {
-		if len(messages)-start == maxResumeMessages {
-			break
-		}
-
+	for start > 0 && len(messages)-start < maxResumeMessages {
 		next := size + len(messages[start-1].Content)
 		if next > maxResumeBytes && start < len(messages) {
 			break

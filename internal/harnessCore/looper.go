@@ -25,17 +25,21 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 	configDir := filepath.Dir(harnessPermissions.AuthPath)
 	userMessageCount := sess.TotalUserMessages + 1
 
+	// Fix the backend for this run. Resuming a session restores GitStatus from
+	// disk and never re-detects git, so both captures must use the same choice.
+	useGit := sess.GitStatus
+
 	// takes a snapshot of the filesystem before running the userMessage thru the agent
 
-	snapshotIDbefore := fmt.Sprintf("%s-before-%d", sess.UID, userMessageCount)
-	switch sess.GitStatus {
+	snapshotID := fmt.Sprintf("%s-before-%d", sess.UID, userMessageCount)
+	switch useGit {
 	case true:
-		if err := harnessSnapshotter.GitTrack(sess.Directory, filepath.Join(configDir, "gitBasedSnapshots"), snapshotIDbefore); err != nil {
+		if err := harnessSnapshotter.GitTrack(sess.Directory, filepath.Join(configDir, "gitBasedSnapshots"), snapshotID); err != nil {
 			log.Printf("Git tracking %s: %v", sess.UID, err)
 			return "", err
 		}
 	case false:
-		if err := harnessSnapshotter.Track(sess.Directory, filepath.Join(configDir, "nonGitBasedSnapshots"), snapshotIDbefore); err != nil {
+		if err := harnessSnapshotter.Track(sess.Directory, filepath.Join(configDir, "nonGitBasedSnapshots"), snapshotID); err != nil {
 			log.Printf("File tracking %s: %v", sess.UID, err)
 			return "", err
 		}
@@ -71,7 +75,7 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 
 	snapshotIDAfter := fmt.Sprintf("%s-after-%d", sess.UID, userMessageCount)
 
-	switch sess.GitStatus {
+	switch useGit {
 	case true:
 		if err := harnessSnapshotter.GitTrack(sess.Directory, filepath.Join(configDir, "gitBasedSnapshots"), snapshotIDAfter); err != nil {
 			log.Printf("Git tracking %s: %v", sess.UID, err)

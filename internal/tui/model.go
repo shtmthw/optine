@@ -85,6 +85,10 @@ type Model struct {
 	// that the next Update can read.
 	clicks *clickTargets
 
+	// cache is a pointer for the same reason: View writes the rendered
+	// static history back into the model it was called on.
+	cache *renderCache
+
 	spinnerFrame int
 	height       int
 	width        int
@@ -97,6 +101,22 @@ type clickTargets struct {
 	opts      []approvalOption
 	visible   bool // whether the buttons are on screen right now
 	maxScroll int  // largest valid Model.scroll for the current content
+}
+
+// renderCache holds the width-dependent render of the header and messages.
+// Spinner and approval lines are appended per frame; they change too often to
+// cache and are only a few lines.
+type renderCache struct {
+	width        int
+	messageCount int
+	dirty        bool
+	lines        []string
+}
+
+func (c *renderCache) invalidate() {
+	if c != nil {
+		c.dirty = true
+	}
 }
 
 type agentFinishedMsg struct {
@@ -206,6 +226,7 @@ func New(
 		reader:     reader,
 		approvalCh: approvalCh,
 		clicks:     &clickTargets{},
+		cache:      &renderCache{dirty: true},
 	}
 
 	if resume != nil {
@@ -288,11 +309,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+		m.cache.invalidate()
+
 	case logLineMsg:
 		m.messages = append(m.messages, Message{
 			Role:    roleEvent,
 			Content: msg.text,
 		})
+		m.cache.invalidate()
 
 	case approvalRequestedMsg:
 		m.pendingApproval = true
@@ -301,6 +325,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionChangedMsg:
 		m.sessionUID = msg.uid
+		m.cache.invalidate()
 
 	case tickMsg:
 		if m.busy {
@@ -403,6 +428,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		Role:    roleUser,
 		Content: userMessage,
 	})
+	m.cache.invalidate()
 
 	m.input = ""
 	m.cursor = 0
@@ -476,53 +502,8 @@ func (m Model) pageSize() int {
 }
 
 // ---------------------------------------------------------------------------
-// Text helpers
+// Conversation helpers
 // ---------------------------------------------------------------------------
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-
-	return v
-}
-
-// cutRunes truncates s to at most n runes.
-func cutRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-
-	return s
-}
-
-// promptSafe makes typed or pasted text fit the single-row prompt by turning
-// line breaks and tabs into spaces.
-func promptSafe(runes []rune) []rune {
-	out := make([]rune, len(runes))
-
-	for i, r := range runes {
-		if r == '\n' || r == '\r' || r == '\t' {
-			r = ' '
-		}
-		out[i] = r
-	}
-
-	return out
-}
-
-func deleteLastWord(s string) string {
-	s = strings.TrimRight(s, " ")
-
-	if i := strings.LastIndex(s, " "); i >= 0 {
-		return s[:i+1]
-	}
-
-	return ""
-}
 
 func lastAgentMessage(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -615,32 +596,8 @@ func centeredStatus(width int, text string) string {
 }
 
 func (m Model) View() string {
-	var b strings.Builder
-
-	b.WriteString("\n")
-	b.WriteString(centeredTitle(m.width))
-	b.WriteString("\n")
-	b.WriteString(centeredMeta(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
-	b.WriteString("\n\n")
-
-	for _, message := range m.messages {
-		b.WriteString(m.renderMessage(message))
-		b.WriteString("\n\n")
-	}
-
-	if m.busy {
-		b.WriteString(
-			statusStyle.Render(spinnerFrames[m.spinnerFrame] + " thinking..."),
-		)
-		b.WriteString("\n\n")
-	}
-
-	optionsRow := -1
-	if m.pendingApproval {
-		optionsRow = m.writeApproval(&b)
-	}
-
-	visible := m.visibleLines(b.String(), optionsRow)
+	lines, optionsRow := m.historyLines()
+	visible := m.visibleLines(lines, optionsRow)
 
 	var out strings.Builder
 	out.WriteString(strings.Join(visible, "\n"))
@@ -654,6 +611,67 @@ func (m Model) View() string {
 	out.WriteString("\n" + m.renderPrompt())
 
 	return out.String()
+}
+
+// historyLines returns the complete history, static and dynamic. The header
+// and messages are cached per width; only spinner and approval rows are
+// rebuilt on every frame, so typing and spinner ticks no longer re-render the
+// whole conversation.
+func (m Model) historyLines() ([]string, int) {
+	cache := m.cache
+	if cache == nil {
+		cache = &renderCache{dirty: true}
+	}
+
+	if cache.dirty || cache.width != m.width || cache.messageCount != len(m.messages) {
+		cache.rebuild(m)
+	}
+
+	lines := cache.lines
+
+	// The static history ends with "\n\n". Its final split element is the
+	// empty line that the first dynamic line will occupy, so drop it before
+	// appending; without this, every spinner/approval frame gains a blank row.
+	if m.busy || m.pendingApproval {
+		lines = lines[:len(lines)-1]
+	}
+
+	if m.busy {
+		spinner := statusStyle.Render(spinnerFrames[m.spinnerFrame] + " thinking...")
+		lines = append(lines[:len(lines):len(lines)], spinner, "")
+	}
+
+	optionsRow := -1
+
+	if m.pendingApproval {
+		optionsRow = len(lines) + 1
+		approval, opts := m.approvalLines()
+		lines = append(lines[:len(lines):len(lines)], approval...)
+		m.clicks.opts = opts
+	}
+
+	return lines, optionsRow
+}
+
+// rebuild renders the width-dependent part of the screen once.
+func (c *renderCache) rebuild(m Model) {
+	var b strings.Builder
+
+	b.WriteString("\n")
+	b.WriteString(centeredTitle(m.width))
+	b.WriteString("\n")
+	b.WriteString(centeredMeta(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
+	b.WriteString("\n\n")
+
+	for _, message := range m.messages {
+		b.WriteString(m.renderMessage(message))
+		b.WriteString("\n\n")
+	}
+
+	c.lines = strings.Split(b.String(), "\n")
+	c.width = m.width
+	c.messageCount = len(m.messages)
+	c.dirty = false
 }
 
 func (m Model) renderMessage(message Message) string {
@@ -681,22 +699,17 @@ func (m Model) renderMessage(message Message) string {
 	return ""
 }
 
-// writeApproval appends the approval prompt and its clickable buttons to b.
-// It records each button's column range for mouse hit-testing and returns the
-// row (within b's output) that the buttons are on.
-func (m Model) writeApproval(b *strings.Builder) int {
-	b.WriteString(
-		approvalStyle.Render("approval required — type y/a/n, or click:"),
-	)
-	b.WriteString("\n")
+// approvalLines renders the approval prompt and its clickable buttons,
+// returning each button's column range for mouse hit-testing.
+func (m Model) approvalLines() ([]string, []approvalOption) {
+	var buttons strings.Builder
 
-	row := strings.Count(b.String(), "\n")
-	m.clicks.opts = nil
+	opts := make([]approvalOption, 0, len(approvalChoices))
 
 	col := 0
 	for i, choice := range approvalChoices {
 		if i > 0 {
-			b.WriteString(buttonGap)
+			buttons.WriteString(buttonGap)
 			col += len(buttonGap)
 		}
 
@@ -708,8 +721,8 @@ func (m Model) writeApproval(b *strings.Builder) int {
 		button := style.Render(choice.label)
 		width := lipgloss.Width(button)
 
-		b.WriteString(button)
-		m.clicks.opts = append(m.clicks.opts, approvalOption{
+		buttons.WriteString(button)
+		opts = append(opts, approvalOption{
 			start:  col,
 			end:    col + width,
 			answer: choice.answer,
@@ -717,18 +730,18 @@ func (m Model) writeApproval(b *strings.Builder) int {
 		col += width
 	}
 
-	b.WriteString("\n\n")
-
-	return row
+	return []string{
+		approvalStyle.Render("approval required — type y/a/n, or click:"),
+		buttons.String(),
+		"",
+	}, opts
 }
 
 // visibleLines picks the part of the history to show: the newest (height-1)
 // lines, shifted up by the scroll offset; the prompt is pinned below them.
 // It also records the scroll limit and whether the approval buttons (on
 // optionsRow, or -1) are on screen, for the next Update.
-func (m Model) visibleLines(history string, optionsRow int) []string {
-	lines := strings.Split(history, "\n")
-
+func (m Model) visibleLines(lines []string, optionsRow int) []string {
 	contentHeight := m.height - 1
 	if contentHeight < 1 {
 		contentHeight = 1

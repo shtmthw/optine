@@ -15,9 +15,6 @@ import (
 // history. Previews are capped separately.
 const MaxFileToolBytes = 256 * 1024
 
-// approvedEditDirs is the per-session "always" set for edit_file.
-var approvedEditDirs = baseApprovedDirs()
-
 var ErrEditDenied = errors.New("edit request has been denied by the user")
 
 // editStringArg reads one required string argument.
@@ -105,8 +102,9 @@ func editAsk(reader *bufio.Reader, path, oldString, newString, prompt string, re
 
 // EditFilePolicy resolves and approves an edit target. The file must already
 // exist; symlinks and hardlinks ask explicitly; sensitive files always ask;
-// other directories ask once per session. Append mode returns an empty
-// oldString and the content to append.
+// other directories ask once per process, and approvals are shared with the
+// other file tools. Append mode returns an empty oldString and the content to
+// append.
 func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition bool) (realPath, oldString, newString string, err error) {
 	var modelPath string
 	var argumentErr error
@@ -189,17 +187,17 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 	switch {
 	case redact: // always asks, even in an approved dir
 		prompt = fmt.Sprintf("Wants to edit a sensitive file %q. Allow it?", realPath)
-	case !approvedEditDirs[realDir]:
+	case !approvedDirs[realDir]:
 		if linkRemember {
 			// A link "always" also approves its resolved directory.
-			approvedEditDirs[realDir] = true
+			approvedDirs[realDir] = true
 			return realPath, oldString, newString, nil
 		}
 		log.Println("edit dir path: ", realDir)
-		prompt = fmt.Sprintf("Wants to edit a file. Choosing always allows editing any file directly in %s for this session.", realDir)
-	default: // the whole dir is already approved this session
+		prompt = fmt.Sprintf("Wants to edit a file. Choosing always permits all file tools and safe bash commands directly in %s for this session.", realDir)
+	default: // the whole dir is already approved
 		if linkRemember {
-			approvedEditDirs[realDir] = true
+			approvedDirs[realDir] = true
 		}
 		return realPath, oldString, newString, nil
 	}
@@ -211,7 +209,7 @@ func EditFilePolicy(arguments map[string]any, reader *bufio.Reader, isAddition b
 	case Once:
 		return realPath, oldString, newString, nil
 	case Remember:
-		approvedEditDirs[realDir] = true
+		approvedDirs[realDir] = true
 		return realPath, oldString, newString, nil
 	default:
 		return "", "", "", fmt.Errorf("edit_file %q: %w", realPath, ErrEditDenied)

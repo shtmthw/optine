@@ -30,7 +30,9 @@ type Config struct {
 	Kind         Kind
 	ContextLimit int
 	MaxTurns     int
-	GitStatus    bool
+	// GitStatus selects the snapshot backend for a new session. Load restores
+	// the saved value instead of consulting this field.
+	GitStatus bool
 }
 
 // Session owns one conversation's history and system-prompt cache. Only the
@@ -44,8 +46,10 @@ type Session struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	ContextLimit      int
-	MaxTurns          int
+	ContextLimit int
+	MaxTurns     int
+	// GitStatus is fixed when the session is created or loaded from disk and
+	// selects the snapshot backend for the session's entire lifetime.
 	GitStatus         bool
 	RunCount          int
 	TotalUserMessages int

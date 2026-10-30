@@ -9,8 +9,6 @@ import (
 	"strings"
 )
 
-var approvedReadDirs = baseApprovedDirs()
-
 var ErrReadDenied = errors.New("read request has been denied by the user")
 
 // pathArgument pulls the required path out of the model's read_file arguments.
@@ -33,6 +31,11 @@ func pathArgument(arguments map[string]any) (string, error) {
 	return path, nil
 }
 
+// readAsk prompts for read_file.
+func readAsk(reader *bufio.Reader, realPath, prompt string) (Answer, error) {
+	return AskFunc("read_file", reader, map[string]any{"path": realPath}, prompt)
+}
+
 // ReadFilePolicy resolves and approves a read target.
 func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, error) {
 	path, err := pathArgument(arguments)
@@ -53,18 +56,35 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 
 	realDir := filepath.Dir(realPath)
 
-	if approvedReadDirs[realDir] {
+	// Sensitive files always prompt, even when their directory is approved.
+	if IsSensitive(realPath) {
+		answer, err := readAsk(reader, realPath,
+			fmt.Sprintf("Wants to read a sensitive file %q. Allow it?", realPath))
+		if err != nil {
+			return "", err
+		}
+
+		switch answer {
+		case Once:
+			return realPath, nil
+
+		case Remember:
+			approvedDirs[realDir] = true
+			return realPath, nil
+
+		default:
+			return "", fmt.Errorf("read_file %q: %w", realPath, ErrReadDenied)
+		}
+	}
+
+	if approvedDirs[realDir] {
 		return realPath, nil
 	}
 
 	log.Println("Dir path: ", realDir)
 
-	answer, err := AskFunc(
-		"read_file",
-		reader,
-		map[string]any{"path": realPath},
-		fmt.Sprintf("Wants to read file. Choosing always allows reading any file directly in %s for this session.", realDir),
-	)
+	answer, err := readAsk(reader, realPath,
+		fmt.Sprintf("Wants to read file. Choosing always permits all file tools and safe bash commands directly in %s for this session.", realDir))
 	if err != nil {
 		return "", err
 	}
@@ -74,7 +94,7 @@ func ReadFilePolicy(arguments map[string]any, reader *bufio.Reader) (string, err
 		return realPath, nil
 
 	case Remember:
-		approvedReadDirs[realDir] = true
+		approvedDirs[realDir] = true
 		return realPath, nil
 
 	default:

@@ -165,6 +165,9 @@ func readAuth(t *testing.T) dataTypes.AuthConfig {
 func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
 	freshAuth(t)
 
+	// A TUI resume restores the saved backend; it must not probe git.
+	t.Setenv("PATH", "")
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)

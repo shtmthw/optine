@@ -10,9 +10,6 @@ import (
 	"strings"
 )
 
-// approvedWriteDirs is the per-session "always" set for write_file.
-var approvedWriteDirs = baseApprovedDirs()
-
 var ErrWriteDenied = errors.New("write request has been denied by the user")
 
 // writeArgs parses write_file arguments. Content may be empty, but the key
@@ -47,7 +44,8 @@ func writeArgs(arguments map[string]any) (path, content string, err error) {
 
 // WriteFilePolicy resolves and approves a new file. It never overwrites;
 // symlinks anywhere on the target path are denied; sensitive files always ask;
-// other directories ask once per session.
+// other directories ask once per process, and approvals are shared with the
+// other file tools.
 func WriteFilePolicy(arguments map[string]any, reader *bufio.Reader) (realPath, content string, err error) {
 	modelPath, content, err := writeArgs(arguments)
 	if err != nil {
@@ -107,14 +105,14 @@ func WriteFilePolicy(arguments map[string]any, reader *bufio.Reader) (realPath, 
 		case Once:
 			return realPath, content, nil
 		case Remember:
-			approvedWriteDirs[realDir] = true
+			approvedDirs[realDir] = true
 			return realPath, content, nil
 		default:
 			return "", "", fmt.Errorf("write_file %q: %w", realPath, ErrWriteDenied)
 		}
 	}
 
-	if approvedWriteDirs[realDir] {
+	if approvedDirs[realDir] {
 		return realPath, content, nil
 	}
 
@@ -124,7 +122,7 @@ func WriteFilePolicy(arguments map[string]any, reader *bufio.Reader) (realPath, 
 		"write_file",
 		reader,
 		map[string]any{"path": realPath},
-		fmt.Sprintf("Wants to create a file. Choosing always allows creating any file directly in %s for this session.", realDir),
+		fmt.Sprintf("Wants to create a file. Choosing always permits all file tools and safe bash commands directly in %s for this session.", realDir),
 	)
 	if err != nil {
 		return "", "", err
@@ -134,7 +132,7 @@ func WriteFilePolicy(arguments map[string]any, reader *bufio.Reader) (realPath, 
 	case Once:
 		return realPath, content, nil
 	case Remember:
-		approvedWriteDirs[realDir] = true
+		approvedDirs[realDir] = true
 		return realPath, content, nil
 	default:
 		return "", "", fmt.Errorf(

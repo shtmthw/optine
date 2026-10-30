@@ -52,9 +52,11 @@ func init() {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		log.Printf("optine config dir %q unavailable: %v", dir, err)
 	}
-	approvedReadDirs[dir] = true
-	approvedEditDirs[dir] = true
-	approvedWriteDirs[dir] = true
+
+	approvedDirs[dir] = true
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		approvedDirs[real] = true
+	}
 
 	AuthPath = filepath.Join(dir, "auth.json")
 
