@@ -1122,32 +1122,6 @@ func (m Model) renderPrompt() string {
 	return prompt
 }
 
-// filterModels filters model IDs by case-insensitive substring. Package-level
-// form operates on the provided slice.
-func filterModels(models []string, query string) []string {
-	q := strings.ToLower(query)
-	if q == "" {
-		out := make([]string, len(models))
-		copy(out, models)
-		return out
-	}
-	out := []string{}
-	for _, model := range models {
-		if strings.Contains(strings.ToLower(model), q) {
-			out = append(out, model)
-		}
-	}
-	return out
-}
-
-func filterModelChoices(models []string, query string) []string {
-	return filterModels(models, query)
-}
-
-func searchModels(models []string, query string) []string {
-	return filterModels(models, query)
-}
-
 // filterModels filters the picker's source choices by case-insensitive substring.
 func (m Model) filterModels(query string) []string {
 	source := m.allModelChoices
@@ -1353,12 +1327,6 @@ func modelIndexAt(c *clickTargets, x, y int, choices ...[]string) int {
 		return -1
 	}
 	return idx
-}
-
-// modelIndexAt is also available as a method on Model for callers that have
-// the model rather than its click targets.
-func (m Model) modelIndexAt(x, y int) int {
-	return modelIndexAt(m.clicks, x, y, m.modelChoices)
 }
 
 func runAgent(

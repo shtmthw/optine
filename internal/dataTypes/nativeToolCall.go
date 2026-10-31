@@ -68,26 +68,26 @@ type OpenAITypeToolCall struct {
 }
 
 type OpenAIChatMessage struct {
-	Role       string             `json:"role"`
-	Content    string             `json:"content"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content"`
 	ToolCalls  []OpenAITypeToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string             `json:"tool_call_id,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
 }
 
 type OpenAIChatRequest struct {
-	Model    string                 `json:"model"`
+	Model    string               `json:"model"`
 	Messages []*OpenAIChatMessage `json:"messages"`
-	Stream   bool                   `json:"stream"`
-	Tools    []NativeTypeTool       `json:"tools,omitempty"`
+	Stream   bool                 `json:"stream"`
+	Tools    []NativeTypeTool     `json:"tools,omitempty"`
 	// vLLM defaults tool_choice to "none", so send "auto" explicitly.
 	ToolChoice string `json:"tool_choice,omitempty"`
 }
 
 type OpenAIChatResponse struct {
 	Choices []struct {
-		Index        int                 `json:"index"`
+		Index        int               `json:"index"`
 		Message      OpenAIChatMessage `json:"message"`
-		FinishReason string              `json:"finish_reason"`
+		FinishReason string            `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens int `json:"prompt_tokens"`
