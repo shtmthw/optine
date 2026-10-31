@@ -37,11 +37,11 @@ func TestOllamaTranscriptKeepsOnlyConversation(t *testing.T) {
 
 func TestVLLMTranscriptKeepsOnlyConversation(t *testing.T) {
 	sess := &Session{
-		Kind: VLLMNative,
-		vllm: []*dataTypes.VLLMTooltypeMessage{
+		Kind: OpenAICompatNative,
+		openAI: []*dataTypes.OpenAIChatMessage{
 			{Role: "system", Content: "system prompt"},
 			{Role: "user", Content: "hello"},
-			{Role: "assistant", Content: "checking files", ToolCalls: []dataTypes.VLLMTypeToolCall{{ID: "call_1"}}},
+			{Role: "assistant", Content: "checking files", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
 			{Role: "tool", ToolCallID: "call_1", Content: "tool result"},
 			{Role: "assistant", Content: "answer"},
 		},

@@ -3,6 +3,7 @@ package tui
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -93,6 +94,18 @@ type Model struct {
 	height       int
 	width        int
 	scroll       int // lines scrolled up from the bottom of the history
+
+	modelPicker          bool
+	modelChoices         []string
+	allModelChoices      []string
+	allModelChoicesLower []string
+	modelSearch          string
+	modelQuery           string
+	searchQuery          string
+	modelFilter          string
+	modelCursor          int
+	modelScroll          int
+	modelResult          chan string
 }
 
 // clickTargets is written by View and read by Update.
@@ -101,6 +114,17 @@ type clickTargets struct {
 	opts      []approvalOption
 	visible   bool // whether the buttons are on screen right now
 	maxScroll int  // largest valid Model.scroll for the current content
+
+	modelVisible  bool // whether the model picker list is on screen
+	modelFirstRow int  // screen row of the first model row
+	modelCount    int  // number of visible model rows
+	modelOffset   int  // index of the first visible model
+	modelChoices  []string
+	choices       []string
+	models        []string
+
+	modelBoxLeft  int // screen column of the picker box's left edge
+	modelBoxWidth int // rendered width of the picker box
 }
 
 // renderCache holds the width-dependent render of the header and messages.
@@ -138,6 +162,27 @@ type approvalRequestedMsg struct{}
 // run and whenever /resume swaps sessions.
 type sessionChangedMsg struct {
 	uid string
+}
+
+// modelChangedMsg carries the provider and model selected via /model so the
+// status line can be updated mid-session.
+type modelChangedMsg struct {
+	provider string
+	model    string
+}
+
+// NotifyModelChanged pushes a provider/model update into the active TUI so its
+// status line stays in sync with a /model selection.
+func NotifyModelChanged(provider, model string) {
+	if activeProgram != nil {
+		activeProgram.Send(modelChangedMsg{provider: provider, model: model})
+	}
+}
+
+// modelPickerOpenMsg opens the interactive model picker in the TUI.
+type modelPickerOpenMsg struct {
+	models []string
+	result chan string
 }
 
 type tickMsg struct{}
@@ -327,6 +372,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionUID = msg.uid
 		m.cache.invalidate()
 
+	case modelChangedMsg:
+		m.provider = msg.provider
+		m.modelName = msg.model
+		m.cache.invalidate()
+
+	case modelPickerOpenMsg:
+		m.modelPicker = true
+		m.modelChoices = msg.models
+		m.allModelChoices = append([]string(nil), msg.models...)
+		m.allModelChoicesLower = make([]string, len(m.allModelChoices))
+		for i, v := range m.allModelChoices {
+			m.allModelChoicesLower[i] = strings.ToLower(v)
+		}
+		m.modelSearch = ""
+		m.modelQuery = ""
+		m.searchQuery = ""
+		m.modelFilter = ""
+		m.input = ""
+		m.cursor = 0
+		m.modelCursor = 0
+		m.modelScroll = 0
+		m.modelResult = msg.result
+		activePickerResult = msg.result
+		if m.clicks != nil {
+			m.clicks.modelVisible = false
+			m.clicks.modelCount = 0
+			m.clicks.modelOffset = 0
+			m.clicks.modelBoxLeft = 0
+			m.clicks.modelBoxWidth = 0
+		}
+		m.cache.invalidate()
+
 	case tickMsg:
 		if m.busy {
 			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
@@ -338,6 +415,81 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.modelPicker {
+		switch msg.String() {
+		case "up", "k":
+			if m.modelCursor > 0 {
+				m.modelCursor--
+			}
+			m.ensureModelCursorVisible()
+
+		case "down", "j":
+			if m.modelCursor < len(m.modelChoices)-1 {
+				m.modelCursor++
+			}
+			m.ensureModelCursorVisible()
+
+		case "pgup":
+			page := m.pageSize()
+			m.modelCursor = clampInt(m.modelCursor-page, 0, len(m.modelChoices)-1)
+			m.modelScroll = clampInt(m.modelScroll-page, 0, m.modelMaxScroll())
+			m.ensureModelCursorVisible()
+
+		case "pgdown":
+			page := m.pageSize()
+			m.modelCursor = clampInt(m.modelCursor+page, 0, len(m.modelChoices)-1)
+			m.modelScroll = clampInt(m.modelScroll+page, 0, m.modelMaxScroll())
+			m.ensureModelCursorVisible()
+
+		case "enter":
+			return m.submit()
+
+		case "esc":
+			if m.currentModelQuery() != "" {
+				m.clearModelQuery()
+				m.applyModelSearch()
+				return m, nil
+			}
+			m = m.cancelModelPicker()
+			return m, nil
+
+		case "backspace", "ctrl+h":
+			if m.cursor > 0 {
+				runes := []rune(m.input)
+				m.input = string(runes[:m.cursor-1]) + string(runes[m.cursor:])
+				m.cursor--
+			}
+			m.syncModelQuery(m.input)
+			m.applyModelSearch()
+
+		case "ctrl+u":
+			m.input = ""
+			m.cursor = 0
+			m.syncModelQuery("")
+			m.applyModelSearch()
+
+		case "ctrl+w":
+			runes := []rune(m.input)
+			before := deleteLastWord(string(runes[:m.cursor]))
+			m.input = before + string(runes[m.cursor:])
+			m.cursor = len([]rune(before))
+			m.syncModelQuery(m.input)
+			m.applyModelSearch()
+
+		default:
+			if len(msg.Runes) > 0 && !msg.Alt {
+				runes := []rune(m.input)
+				typed := promptSafe(msg.Runes)
+				m.input = string(runes[:m.cursor]) + string(typed) + string(runes[m.cursor:])
+				m.cursor += len(typed)
+				m.syncModelQuery(m.input)
+				m.applyModelSearch()
+			}
+		}
+
+		return m, nil
+	}
+
 	switch msg.String() {
 
 	case "ctrl+c":
@@ -409,6 +561,11 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // submit handles Enter: it answers a pending approval, or sends the typed
 // text to the agent as a new chat message.
 func (m Model) submit() (tea.Model, tea.Cmd) {
+	if m.modelPicker {
+		m = m.selectModel(m.modelCursor)
+		return m, nil
+	}
+
 	// While an approval prompt is pending, whatever the user typed is an
 	// answer to that prompt, not a chat message.
 	if m.busy && m.pendingApproval {
@@ -424,11 +581,13 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.messages = append(m.messages, Message{
-		Role:    roleUser,
-		Content: userMessage,
-	})
-	m.cache.invalidate()
+	if !strings.HasPrefix(userMessage, "/") {
+		m.messages = append(m.messages, Message{
+			Role:    roleUser,
+			Content: userMessage,
+		})
+		m.cache.invalidate()
+	}
 
 	m.input = ""
 	m.cursor = 0
@@ -460,6 +619,32 @@ func (m Model) answerApproval(answer string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.modelPicker {
+		switch {
+		case msg.Button == tea.MouseButtonWheelUp:
+			m.modelScroll = clampInt(m.modelScroll-wheelStep, 0, m.modelMaxScroll())
+
+		case msg.Button == tea.MouseButtonWheelDown:
+			m.modelScroll = clampInt(m.modelScroll+wheelStep, 0, m.modelMaxScroll())
+
+		case msg.Action == tea.MouseActionMotion:
+			if idx := modelIndexAt(m.clicks, msg.X, msg.Y); idx >= 0 {
+				m.modelCursor = idx
+			}
+
+		case msg.Action == tea.MouseActionPress &&
+			msg.Button == tea.MouseButtonLeft:
+			if idx := modelIndexAt(m.clicks, msg.X, msg.Y); idx >= 0 {
+				m.modelCursor = idx
+				m = m.selectModel(idx)
+			} else {
+				m = m.cancelModelPicker()
+			}
+		}
+
+		return m, nil
+	}
+
 	switch {
 	case msg.Button == tea.MouseButtonWheelUp:
 		m.scroll = m.scrolledBy(wheelStep)
@@ -595,7 +780,145 @@ func centeredStatus(width int, text string) string {
 	return statusStyle.Width(inner).Align(lipgloss.Center).Render(cutRunes(text, inner))
 }
 
+// modelPickerView renders the interactive model picker.
+func (m Model) modelPickerView() string {
+	c := m.clicks
+	if c == nil {
+		c = &clickTargets{}
+		m.clicks = c
+	}
+
+	choices := m.modelChoices
+	visibleCount := m.modelVisibleCount()
+	maxScroll := len(choices) - visibleCount
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	scroll := clampInt(m.modelScroll, 0, maxScroll)
+
+	selectedStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("231")).
+		Background(lipgloss.Color("99")).
+		Padding(0, 1)
+	unselectedStyle := lipgloss.NewStyle().
+		Padding(0, 1)
+
+	header := "Select a model (↑/↓, Enter, Esc, click):"
+
+	start := scroll
+	end := scroll + visibleCount
+	if end > len(choices) {
+		end = len(choices)
+	}
+	var modelLines []string
+	for i := start; i < end; i++ {
+		line := choices[i]
+		if i == m.modelCursor {
+			line = selectedStyle.Render("> " + line)
+		} else {
+			line = unselectedStyle.Render("  " + line)
+		}
+		modelLines = append(modelLines, line)
+	}
+	for len(modelLines) < 10 {
+		modelLines = append(modelLines, "")
+	}
+
+	q := m.currentModelQuery()
+	content := q
+	if q == "" {
+		content = "search a model by typing on your keyboard"
+	}
+	if len(choices) > visibleCount && len(choices) > 0 {
+		content += "   " + fmt.Sprintf("%d/%d", m.modelCursor+1, len(choices))
+	}
+
+	innerWidth := lipgloss.Width(header)
+	source := m.allModelChoices
+	if len(source) == 0 {
+		source = m.modelChoices
+	}
+	for _, name := range source {
+		line := unselectedStyle.Render("  " + name)
+		if w := lipgloss.Width(line); w > innerWidth {
+			innerWidth = w
+		}
+	}
+	// Ensure the fixed search box can fit the placeholder and the worst-case
+	// position text without wrapping, independent of the active filter.
+	placeholder := "search a model by typing on your keyboard"
+	minContent := placeholder
+	if len(source) > visibleCount {
+		minContent += "   " + fmt.Sprintf("%d/%d", len(source), len(source))
+	}
+	if required := lipgloss.Width(minContent) + 4; required > innerWidth {
+		innerWidth = required
+	}
+	searchWidth := innerWidth - 4
+	if searchWidth < 1 {
+		searchWidth = 1
+	}
+	searchBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("255")).
+		Padding(0, 1).
+		Width(searchWidth).
+		Render(content)
+
+	var inner []string
+	inner = append(inner, header)
+	inner = append(inner, modelLines...)
+	for _, line := range strings.Split(searchBox, "\n") {
+		inner = append(inner, line)
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("99")).
+		Padding(1, 2, 0, 2).
+		Render(strings.Join(inner, "\n"))
+
+	boxHeight := len(strings.Split(box, "\n"))
+	top := (m.height - boxHeight) / 2
+	if top < 0 {
+		top = 0
+	}
+	left := (m.width - lipgloss.Width(box)) / 2
+	if left < 0 {
+		left = 0
+	}
+
+	c.modelVisible = true
+	c.modelFirstRow = top + 3
+	c.modelCount = visibleCount
+	c.modelOffset = scroll
+	c.modelChoices = append([]string{}, choices...)
+	c.choices = append([]string{}, choices...)
+	c.models = append([]string{}, choices...)
+	c.modelBoxLeft = left
+	c.modelBoxWidth = lipgloss.Width(box)
+	c.maxScroll = maxScroll
+
+	lines := strings.Split(box, "\n")
+	var out []string
+	for i := 0; i < top; i++ {
+		out = append(out, "")
+	}
+	for _, line := range lines {
+		out = append(out, strings.Repeat(" ", left)+line)
+	}
+	for len(out) < m.height {
+		out = append(out, "")
+	}
+	return strings.Join(out, "\n")
+}
+
 func (m Model) View() string {
+	if m.modelPicker {
+		return m.modelPickerView()
+	}
+
 	lines, optionsRow := m.historyLines()
 	visible := m.visibleLines(lines, optionsRow)
 
@@ -797,6 +1120,245 @@ func (m Model) renderPrompt() string {
 	}
 
 	return prompt
+}
+
+// filterModels filters model IDs by case-insensitive substring. Package-level
+// form operates on the provided slice.
+func filterModels(models []string, query string) []string {
+	q := strings.ToLower(query)
+	if q == "" {
+		out := make([]string, len(models))
+		copy(out, models)
+		return out
+	}
+	out := []string{}
+	for _, model := range models {
+		if strings.Contains(strings.ToLower(model), q) {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+func filterModelChoices(models []string, query string) []string {
+	return filterModels(models, query)
+}
+
+func searchModels(models []string, query string) []string {
+	return filterModels(models, query)
+}
+
+// filterModels filters the picker's source choices by case-insensitive substring.
+func (m Model) filterModels(query string) []string {
+	source := m.allModelChoices
+	lowers := m.allModelChoicesLower
+	if len(source) == 0 {
+		source = m.modelChoices
+		lowers = nil
+	}
+	q := strings.ToLower(query)
+	if q == "" {
+		out := make([]string, len(source))
+		copy(out, source)
+		return out
+	}
+	out := []string{}
+	for i, model := range source {
+		lower := ""
+		if i < len(lowers) {
+			lower = lowers[i]
+		} else {
+			lower = strings.ToLower(model)
+		}
+		if strings.Contains(lower, q) {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+func (m *Model) syncModelQuery(q string) {
+	m.modelSearch = q
+	m.modelQuery = q
+	m.searchQuery = q
+	m.modelFilter = q
+	m.input = q
+}
+
+func (m Model) currentModelQuery() string {
+	if m.modelSearch != "" {
+		return m.modelSearch
+	}
+	if m.modelQuery != "" {
+		return m.modelQuery
+	}
+	if m.searchQuery != "" {
+		return m.searchQuery
+	}
+	if m.modelFilter != "" {
+		return m.modelFilter
+	}
+	return m.input
+}
+
+func (m *Model) clearModelQuery() {
+	m.syncModelQuery("")
+}
+
+func (m *Model) applyModelSearch() {
+	q := m.modelSearch
+	if q == "" {
+		q = m.modelQuery
+	}
+	if q == "" {
+		q = m.searchQuery
+	}
+	if q == "" {
+		q = m.modelFilter
+	}
+	if q == "" {
+		q = m.input
+	}
+	m.syncModelQuery(q)
+	m.cursor = len([]rune(q))
+	m.modelChoices = m.filterModels(q)
+	m.modelCursor = 0
+	m.modelScroll = 0
+	m.ensureModelCursorVisible()
+}
+
+// modelMaxScroll returns the largest valid modelScroll for the current choices.
+func (m Model) modelMaxScroll() int {
+	count := m.modelVisibleCount()
+	max := len(m.modelChoices) - count
+	if max < 0 {
+		max = 0
+	}
+	return max
+}
+
+// modelVisibleCount returns how many model rows fit on screen.
+func (m Model) modelVisibleCount() int {
+	n := 10
+	if len(m.modelChoices) < n {
+		n = len(m.modelChoices)
+	}
+	if n < 1 {
+		n = 1
+	}
+	if max := m.height - 6; max > 0 && n > max {
+		n = max
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// ensureModelCursorVisible keeps the cursor inside the scrolled window.
+func (m *Model) ensureModelCursorVisible() {
+	count := m.modelVisibleCount()
+	if count < 1 {
+		count = 1
+	}
+	if m.modelCursor < m.modelScroll {
+		m.modelScroll = m.modelCursor
+	}
+	if m.modelCursor >= m.modelScroll+count {
+		m.modelScroll = m.modelCursor - count + 1
+	}
+	m.modelScroll = clampInt(m.modelScroll, 0, m.modelMaxScroll())
+}
+
+// selectModel disables the picker, sends the chosen ID, and clears the result channel.
+func (m *Model) selectModel(index int) Model {
+	selected := ""
+	if index >= 0 && index < len(m.modelChoices) {
+		selected = m.modelChoices[index]
+	}
+	m.modelCursor = index
+	m.modelPicker = false
+	m.input = ""
+	m.cursor = 0
+	m.modelSearch = ""
+	m.modelQuery = ""
+	m.searchQuery = ""
+	m.modelFilter = ""
+	if selected != "" {
+		m.modelName = selected
+		m.cache.invalidate()
+	}
+	if m.modelResult != nil {
+		select {
+		case m.modelResult <- selected:
+		default:
+		}
+		m.modelResult = nil
+	}
+	activePickerResult = nil
+	return *m
+}
+
+// cancelModelPicker disables the picker and sends an empty selection.
+func (m *Model) cancelModelPicker() Model {
+	m.modelPicker = false
+	m.input = ""
+	m.cursor = 0
+	m.modelSearch = ""
+	m.modelQuery = ""
+	m.searchQuery = ""
+	m.modelFilter = ""
+	if m.modelResult != nil {
+		select {
+		case m.modelResult <- "":
+		default:
+		}
+		m.modelResult = nil
+	}
+	activePickerResult = nil
+	return *m
+}
+
+// modelIndexAt maps a screen cell to a model index, or -1 if none.
+// modelIndexAt maps a screen cell to a model index, or -1 if none.
+func modelIndexAt(c *clickTargets, x, y int, choices ...[]string) int {
+	if c == nil || !c.modelVisible {
+		return -1
+	}
+	if c.modelBoxWidth > 0 && (x < c.modelBoxLeft || x >= c.modelBoxLeft+c.modelBoxWidth) {
+		return -1
+	}
+	if y < c.modelFirstRow || y >= c.modelFirstRow+c.modelCount {
+		return -1
+	}
+	idx := c.modelOffset + (y - c.modelFirstRow)
+	if idx < c.modelOffset || idx >= c.modelOffset+c.modelCount {
+		return -1
+	}
+	total := -1
+	if len(choices) > 0 {
+		total = len(choices[0])
+	} else if c.modelChoices != nil {
+		total = len(c.modelChoices)
+	} else if c.choices != nil {
+		total = len(c.choices)
+	} else if c.models != nil {
+		total = len(c.models)
+	}
+	if total < 0 {
+		// No choices information provided: preserve legacy count-based bounds.
+		total = c.modelOffset + c.modelCount
+	}
+	if idx >= total {
+		return -1
+	}
+	return idx
+}
+
+// modelIndexAt is also available as a method on Model for callers that have
+// the model rather than its click targets.
+func (m Model) modelIndexAt(x, y int) int {
+	return modelIndexAt(m.clicks, x, y, m.modelChoices)
 }
 
 func runAgent(

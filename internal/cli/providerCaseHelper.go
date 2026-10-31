@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/mattthew/optine/internal/harnessPermissions"
 	"github.com/mattthew/optine/internal/provider"
 )
 
@@ -23,6 +24,18 @@ func checkProviderAvailability(providerName, modelName string) error {
 		_, err := provider.VLLMGetModelData()
 		if err != nil {
 			return fmt.Errorf("error occured while trying to communicate with the local vLLM server, err: %v", err)
+		}
+
+	case "Openrouter":
+		key, err := harnessPermissions.GetAPIKey("openrouter")
+		if err != nil {
+			return err
+		}
+		if err := withSpinner("Authorizing OpenRouter key", func() error {
+			_, validateErr := provider.ValidateOpenRouterKey(key)
+			return validateErr
+		}); err != nil {
+			return fmt.Errorf("error occured while trying to communicate with OpenRouter, err: %v", err)
 		}
 	default:
 		return fmt.Errorf("Unrecognized provider, please select any supported providers or connect using /connect.")

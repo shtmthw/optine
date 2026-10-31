@@ -59,7 +59,7 @@ func TestOllamaMalformedBodiesAbortAfterBudget(t *testing.T) {
 func TestVLLMMalformedBodiesAbortAfterBudget(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	calls := garbageServer(t, &vLLMChatURL)
-	_, err := vllmToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.VLLMNative))
+	_, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
 	if !errors.Is(err, ErrMalformedJSON) {
 		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 	}

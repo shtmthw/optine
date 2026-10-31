@@ -64,11 +64,11 @@ func TestVLLMLoopPersistsFinalAnswer(t *testing.T) {
 	fakeChatServer(t, `{"choices":[{"message":{"role":"assistant","content":"done"}}],"usage":{"prompt_tokens":7}}`)
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	sess := testSession(t, harnessSession.VLLMNative)
+	sess := testSession(t, harnessSession.OpenAICompatNative)
 	sess.BeginRun()
 	sess.AppendUser("hi")
 
-	out, err := vllmToolLoop(context.Background(), reader, "test-model", sess)
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", sess, vLLMChatURL, "")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestVLLMLoopPersistsFinalAnswer(t *testing.T) {
 		t.Fatalf("want answer %q, got %q", "done", out)
 	}
 
-	msgs := *sess.VLLM()
+	msgs := *sess.OpenAI()
 	last := msgs[len(msgs)-1]
 	if last.Role != "assistant" || last.Content != "done" {
 		t.Fatalf("final assistant turn missing from history: %+v", last)

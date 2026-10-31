@@ -14,9 +14,9 @@ import (
 type Kind string
 
 const (
-	OllamaNative Kind = "ollama-native"
-	VLLMNative   Kind = "vllm-native"
-	Envelope     Kind = "envelope"
+	OllamaNative       Kind = "ollama-native"
+	OpenAICompatNative Kind = "openAI-native"
+	Envelope           Kind = "envelope"
 )
 
 // DefaultContextLimit is used when the provider reports no context window.
@@ -58,7 +58,7 @@ type Session struct {
 	SystemCache systemCache
 
 	ollama   []*dataTypes.NativeTooltypeMessage
-	vllm     []*dataTypes.VLLMTooltypeMessage
+	openAI   []*dataTypes.OpenAIChatMessage
 	envelope []*dataTypes.NonNativeMessage
 }
 
@@ -71,8 +71,8 @@ func KindFor(provider string, nativeToolCalling bool) Kind {
 		return Envelope
 	}
 
-	if provider == "vLLM" {
-		return VLLMNative
+	if provider == "vLLM" || provider == "Openrouter" {
+		return OpenAICompatNative
 	}
 
 	return OllamaNative
@@ -122,8 +122,8 @@ func (s *Session) AppendUser(content string) {
 	switch s.Kind {
 	case OllamaNative:
 		s.ollama = append(s.ollama, &dataTypes.NativeTooltypeMessage{Role: "user", Content: content})
-	case VLLMNative:
-		s.vllm = append(s.vllm, &dataTypes.VLLMTooltypeMessage{Role: "user", Content: content})
+	case OpenAICompatNative:
+		s.openAI = append(s.openAI, &dataTypes.OpenAIChatMessage{Role: "user", Content: content})
 	case Envelope:
 		s.envelope = append(s.envelope, &dataTypes.NonNativeMessage{Role: "user", Content: content})
 	}
@@ -135,7 +135,7 @@ func (s *Session) AppendUser(content string) {
 
 func (s *Session) Ollama() *[]*dataTypes.NativeTooltypeMessage { return &s.ollama }
 
-func (s *Session) VLLM() *[]*dataTypes.VLLMTooltypeMessage { return &s.vllm }
+func (s *Session) OpenAI() *[]*dataTypes.OpenAIChatMessage { return &s.openAI }
 
 func (s *Session) Envelope() *[]*dataTypes.NonNativeMessage { return &s.envelope }
 
@@ -152,8 +152,8 @@ func (s *Session) Len() int {
 	switch s.Kind {
 	case OllamaNative:
 		return len(s.ollama)
-	case VLLMNative:
-		return len(s.vllm)
+	case OpenAICompatNative:
+		return len(s.openAI)
 	case Envelope:
 		return len(s.envelope)
 	}
@@ -164,7 +164,7 @@ func (s *Session) Len() int {
 // Resumeable reports whether this session can continue on the given loop.
 func (s *Session) Resumeable(kind Kind) error {
 	if s.Kind != kind {
-		return fmt.Errorf("session %s is a %s session and cannot resume as %s", s.UID, s.Kind, kind)
+		return fmt.Errorf("session %s is of the %s protocol and cannot resume as %s", s.UID, s.Kind, kind)
 	}
 
 	return nil
@@ -178,11 +178,11 @@ func (s *Session) setSystemContent(content string) {
 			s.ollama = append([]*dataTypes.NativeTooltypeMessage{{Role: "system"}}, s.ollama...)
 		}
 		s.ollama[0].Content = content
-	case VLLMNative:
-		if len(s.vllm) == 0 || s.vllm[0].Role != "system" {
-			s.vllm = append([]*dataTypes.VLLMTooltypeMessage{{Role: "system"}}, s.vllm...)
+	case OpenAICompatNative:
+		if len(s.openAI) == 0 || s.openAI[0].Role != "system" {
+			s.openAI = append([]*dataTypes.OpenAIChatMessage{{Role: "system"}}, s.openAI...)
 		}
-		s.vllm[0].Content = content
+		s.openAI[0].Content = content
 	case Envelope:
 		if len(s.envelope) == 0 || s.envelope[0].Role != "system" {
 			s.envelope = append([]*dataTypes.NonNativeMessage{{Role: "system"}}, s.envelope...)

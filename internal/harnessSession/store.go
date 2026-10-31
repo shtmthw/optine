@@ -49,7 +49,7 @@ type sessionFile struct {
 	TotalUserMessages int                                `json:"total_user_messages"`
 	LastPromptTokens  int                                `json:"last_prompt_tokens,omitempty"`
 	Ollama            []*dataTypes.NativeTooltypeMessage `json:"ollama_messages,omitempty"`
-	VLLM              []*dataTypes.VLLMTooltypeMessage   `json:"vllm_messages,omitempty"`
+	OpenAICompat      []*dataTypes.OpenAIChatMessage     `json:"vllm_messages,omitempty"`
 	Envelope          []*dataTypes.NonNativeMessage      `json:"envelope_messages,omitempty"`
 }
 
@@ -57,8 +57,8 @@ func (f sessionFile) messageLen() int {
 	switch f.Kind {
 	case OllamaNative:
 		return len(f.Ollama)
-	case VLLMNative:
-		return len(f.VLLM)
+	case OpenAICompatNative:
+		return len(f.OpenAICompat)
 	case Envelope:
 		return len(f.Envelope)
 	}
@@ -86,8 +86,8 @@ func toFile(s *Session) sessionFile {
 	switch s.Kind {
 	case OllamaNative:
 		f.Ollama = s.ollama
-	case VLLMNative:
-		f.VLLM = s.vllm
+	case OpenAICompatNative:
+		f.OpenAICompat = s.openAI
 	case Envelope:
 		f.Envelope = s.envelope
 	}
@@ -267,9 +267,9 @@ func Load(uid string) (*Session, error) {
 		if err := validateOllamaPairs(s.ollama); err != nil {
 			return nil, fmt.Errorf("session %s is corrupt: %w", uid, err)
 		}
-	case VLLMNative:
-		s.vllm = f.VLLM
-		if err := validateVLLMPairs(s.vllm); err != nil {
+	case OpenAICompatNative:
+		s.openAI = f.OpenAICompat
+		if err := validateOpenAIPairs(s.openAI); err != nil {
 			return nil, fmt.Errorf("session %s is corrupt: %w", uid, err)
 		}
 	case Envelope:
@@ -313,8 +313,8 @@ func validateOllamaPairs(msgs []*dataTypes.NativeTooltypeMessage) error {
 	return nil
 }
 
-// validateVLLMPairs checks that every vLLM tool call id has a reply.
-func validateVLLMPairs(msgs []*dataTypes.VLLMTooltypeMessage) error {
+// validateOpenAIPairs checks that every vLLM tool call id has a reply.
+func validateOpenAIPairs(msgs []*dataTypes.OpenAIChatMessage) error {
 	for i, msg := range msgs {
 		if msg == nil {
 			return errors.New("nil message")

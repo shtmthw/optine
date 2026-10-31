@@ -18,7 +18,6 @@ import (
 func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader) (string, error) {
 	// A format mismatch would append into the wrong slot.
 	if err := sess.Resumeable(harnessSession.KindFor(agentConfig.Provider, agentConfig.NativeToolCalling)); err != nil {
-		log.Printf("session %s: %v", sess.UID, err)
 		return "", err
 	}
 
@@ -90,9 +89,8 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			log.Println("error occured in agent loop, err: ", err)
+			return "", err
 		}
-		return "", err
 	}
 	return result, nil
 }

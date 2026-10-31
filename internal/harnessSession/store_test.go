@@ -131,14 +131,14 @@ func TestLoadRejectsOrphanedToolCall(t *testing.T) {
 
 	broken := sessionFile{
 		UID:      "s1",
-		Kind:     VLLMNative,
+		Kind:     OpenAICompatNative,
 		Provider: "vLLM",
 		Model:    "m",
 		RunCount: 1,
-		VLLM: []*dataTypes.VLLMTooltypeMessage{
+		OpenAICompat: []*dataTypes.OpenAIChatMessage{
 			{Role: "system", Content: "sys"},
 			{Role: "user", Content: "hi"},
-			{Role: "assistant", ToolCalls: []dataTypes.VLLMTypeToolCall{{ID: "call_1"}}},
+			{Role: "assistant", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
 		},
 	}
 
@@ -165,13 +165,13 @@ func TestLoadRejectsPathTraversal(t *testing.T) {
 }
 
 func TestVLLMPairValidationAcceptsCompletePair(t *testing.T) {
-	msgs := []*dataTypes.VLLMTooltypeMessage{
+	msgs := []*dataTypes.OpenAIChatMessage{
 		{Role: "system", Content: "sys"},
-		{Role: "assistant", ToolCalls: []dataTypes.VLLMTypeToolCall{{ID: "call_1"}}},
+		{Role: "assistant", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
 		{Role: "tool", ToolCallID: "call_1", Content: "ok"},
 	}
 
-	if err := validateVLLMPairs(msgs); err != nil {
+	if err := validateOpenAIPairs(msgs); err != nil {
 		t.Fatalf("complete pair should validate: %v", err)
 	}
 }

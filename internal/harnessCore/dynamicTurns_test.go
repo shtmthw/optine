@@ -108,7 +108,7 @@ func TestVLLMLoopGrowsPastBaseTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	out, err := vllmToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.VLLMNative))
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestVLLMLoopStopsAtMaxTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	_, err := vllmToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.VLLMNative))
+	_, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
 	if !errors.Is(err, ErrMaxInferenceCalls) {
 		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
 	}

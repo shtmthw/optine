@@ -64,14 +64,32 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		return false
 
 	case "/help", "/h":
-		log.Println("available commands: /local (pick provider and start), /resume (pick session and resume work), /remote (under development), /connect (connect to supported api providers), /funfact, /help, /quit")
+		log.Println("available commands: /local (pick your local provider and start), /resume (pick session and resume work), /remote (pick your remote provider and start), /connect (connect to supported api providers), /funfact, /help, /quit")
 		return false
 
 	case "/quit", "/exit", "/q":
 		return true
 
 	case "/funfact":
-		log.Println("this is a one man built agent, and that man is Matthew Baroi")
+		log.Println("this is an one man built agent, and that man is Matthew Baroi")
+		return false
+
+	case "/remote":
+		if externalInput {
+			log.Println("not allowed to run /remote while in the agent interface")
+			return false
+		}
+		log.Println("starting /remote execution")
+
+		//check the api keys availability based on the keys that match the supported providers name in auth.json in the config dir
+		err := filterModelProviderAvailability(reader)
+
+		if err != nil {
+			log.Printf("error: %v", err)
+			return false
+		}
+
+		log.Println("Successfully validated, and ready to make a connection.")
 		return false
 	case "/resume":
 		cwd, err := os.Getwd()
@@ -105,7 +123,7 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 
 		log.Println("Resuming the last session related to this directory...")
 
-		if err := runAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID, true); err != nil {
+		if err := RunAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID, true); err != nil {
 			log.Printf("error occurred while trying to initiate the agent, err: %v", err)
 			return false
 		}

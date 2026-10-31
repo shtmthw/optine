@@ -52,11 +52,12 @@ type NativeToolChatResponse struct {
 	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
 }
 
-// OpenAI-compatible shapes served by vLLM. They differ from the Ollama types:
-// responses are wrapped in "choices" and tool arguments are JSON strings.
+// OpenAI-compatible shapes, used by vLLM and OpenRouter. They differ from
+// the Ollama types: responses are wrapped in "choices" and tool arguments are
+// JSON strings.
 
-// VLLMTypeToolCall is the OpenAI-style counterpart of NativeTypeToolCall.
-type VLLMTypeToolCall struct {
+// OpenAITypeToolCall is the OpenAI-style counterpart of NativeTypeToolCall.
+type OpenAITypeToolCall struct {
 	ID       string `json:"id,omitempty"`
 	Type     string `json:"type,omitempty"`
 	Index    int    `json:"index,omitempty"`
@@ -66,26 +67,26 @@ type VLLMTypeToolCall struct {
 	} `json:"function"`
 }
 
-type VLLMTooltypeMessage struct {
+type OpenAIChatMessage struct {
 	Role       string             `json:"role"`
 	Content    string             `json:"content"`
-	ToolCalls  []VLLMTypeToolCall `json:"tool_calls,omitempty"`
+	ToolCalls  []OpenAITypeToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string             `json:"tool_call_id,omitempty"`
 }
 
-type VLLMNChatRequest struct {
+type OpenAIChatRequest struct {
 	Model    string                 `json:"model"`
-	Messages []*VLLMTooltypeMessage `json:"messages"`
+	Messages []*OpenAIChatMessage `json:"messages"`
 	Stream   bool                   `json:"stream"`
 	Tools    []NativeTypeTool       `json:"tools,omitempty"`
 	// vLLM defaults tool_choice to "none", so send "auto" explicitly.
 	ToolChoice string `json:"tool_choice,omitempty"`
 }
 
-type VLLMNChatResponse struct {
+type OpenAIChatResponse struct {
 	Choices []struct {
 		Index        int                 `json:"index"`
-		Message      VLLMTooltypeMessage `json:"message"`
+		Message      OpenAIChatMessage `json:"message"`
 		FinishReason string              `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {

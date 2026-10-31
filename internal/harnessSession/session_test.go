@@ -130,7 +130,7 @@ func TestResumeableKindMismatch(t *testing.T) {
 		t.Fatalf("same kind should be resumable: %v", err)
 	}
 
-	if err := sess.Resumeable(VLLMNative); err == nil {
+	if err := sess.Resumeable(OpenAICompatNative); err == nil {
 		t.Fatal("cross-kind resume must be rejected")
 	}
 }

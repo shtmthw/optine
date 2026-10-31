@@ -38,8 +38,8 @@ func (s *Session) Transcript() []TranscriptEntry {
 	switch s.Kind {
 	case OllamaNative:
 		return ollamaTranscript(s.ollama)
-	case VLLMNative:
-		return vllmTranscript(s.vllm)
+	case OpenAICompatNative:
+		return openAITranscript(s.openAI)
 	case Envelope:
 		return envelopeTranscript(s.envelope)
 	}
@@ -66,7 +66,7 @@ func ollamaTranscript(messages []*dataTypes.NativeTooltypeMessage) []TranscriptE
 	return entries
 }
 
-func vllmTranscript(messages []*dataTypes.VLLMTooltypeMessage) []TranscriptEntry {
+func openAITranscript(messages []*dataTypes.OpenAIChatMessage) []TranscriptEntry {
 	entries := make([]TranscriptEntry, 0, len(messages))
 
 	for _, msg := range messages {

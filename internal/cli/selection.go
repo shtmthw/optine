@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,7 @@ var connections = []string{
 	"Tavily",
 	"OpenAI",
 	"Anthropic",
+	"Openrouter",
 }
 
 func handleError(err error) error {
@@ -54,70 +56,6 @@ func selectOption(reader *bufio.Reader, maxRange int, dataSlice []string) (strin
 		return dataSlice[n-1], nil
 	}
 	return "", fmt.Errorf("too many invalid attempts")
-}
-
-func handleAPIkeyInput(reader *bufio.Reader, selectedConnection string) error {
-
-	apiKey, err := reader.ReadString('\n')
-
-	if err != nil {
-		return err
-	}
-
-	apiKey = strings.TrimSpace(apiKey)
-
-	errSavingConnection := saveConnection(selectedConnection, apiKey)
-
-	if errSavingConnection != nil {
-		return errSavingConnection
-	}
-	return nil
-}
-
-// selectConnection prompts for an API provider and stores its key.
-func selectConnection(reader *bufio.Reader) error {
-	log.Println("<connector list>")
-
-	for i, coonection := range connections {
-		log.Printf("%d. %s\n", i+1, coonection)
-	}
-
-	selectedConnection, err := selectOption(reader, 5, connections)
-
-	if err != nil {
-		return handleError(err)
-	}
-
-	switch selectedConnection {
-	case "Tavily":
-
-		log.Printf("You have selected Tavily, please input the API key.")
-
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	case "OpenAI":
-		log.Printf("You have selected OpenAI, please input the API key.")
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	case "Anthropic":
-		log.Printf("You have selected Anthropic, please input the API key.")
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	}
-
-	return nil
 }
 
 func selectProvider(reader *bufio.Reader) error {
@@ -174,7 +112,7 @@ func selectProvider(reader *bufio.Reader) error {
 		}
 
 		log.Printf("Model %s loaded", selectedModel)
-		return runAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel), "", false)
+		return RunAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel), "", false)
 
 	case "vLLM":
 		modelName, err := provider.VLLMGetModelData()
@@ -198,14 +136,14 @@ func selectProvider(reader *bufio.Reader) error {
 		if err != nil {
 			log.Printf("vLLM context window probe failed: %v", err)
 		}
-		return runAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "", false)
+		return RunAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "", false)
 	}
 
 	return nil
 }
 
 // runAgentSession owns the session for the whole TUI lifetime.
-func runAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string, fromCLI bool) error {
+func RunAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string, fromCLI bool) error {
 	// Tools run against the process working directory, so that is the
 	// session's Directory.
 	CWD, wdErr := os.Getwd()
@@ -240,9 +178,87 @@ func runAgentSession(providerName string, modelName string, nativeToolCalling bo
 	log.Printf("session %s running (%s, %s) in %s", sess.UID, providerName, modelName, sess.Directory)
 
 	configDir := filepath.Dir(harnessPermissions.AuthPath)
-	agent := func(ctx context.Context, provider string, modelName string, msg string, r *bufio.Reader) (tui.AgentResult, error) {
+	agent := func(ctx context.Context, modelProvider string, modelName string, msg string, r *bufio.Reader) (tui.AgentResult, error) {
 		msg = strings.TrimSpace(msg)
 
+		if msg == "/model" {
+			modelProviders := make(map[string]string)
+			modelToolSupport := make(map[string]bool)
+			modelContextLimits := make(map[string]int)
+
+			ollamaModelNames, err := provider.OllamaGetModelData()
+			if err == nil {
+				for _, model := range ollamaModelNames {
+					meta, metaErr := provider.OllamaGetModelMetaData(model)
+					hasTools := false
+					ctxLimit := 0
+					if metaErr == nil {
+						hasTools = slices.Contains(meta.Capabilities, "tools")
+						ctxLimit = meta.ContextLength(model)
+					}
+					modelProviders[model] = "Ollama"
+					modelToolSupport[model] = hasTools
+					modelContextLimits[model] = ctxLimit
+				}
+			}
+
+			for _, model := range provider.AllOpenrouterModels {
+				modelProviders[model.ID] = "Openrouter"
+				modelToolSupport[model.ID] = slices.Contains(model.SupportedParameters, "tools")
+				modelContextLimits[model.ID] = model.ContextLength
+			}
+
+			ids := make([]string, 0, len(modelProviders))
+			for id := range modelProviders {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+
+			selected, _ := tui.PickModel(ids)
+
+			if selected != "" {
+				selectedProvider := modelProviders[selected]
+				selectedNative := modelToolSupport[selected]
+				selectedContext := modelContextLimits[selected]
+
+				agentConf.Provider = selectedProvider
+				agentConf.Model = selected
+				agentConf.NativeToolCalling = selectedNative
+
+				if selectedProvider != sess.Provider {
+					ctxLimit := selectedContext
+					if ctxLimit <= 0 {
+						ctxLimit = sess.ContextLimit
+					}
+					newSess, err := sessionForRun(harnessSession.Config{
+						Provider:     selectedProvider,
+						Model:        selected,
+						Directory:    sess.Directory,
+						Kind:         harnessSession.KindFor(selectedProvider, selectedNative),
+						ContextLimit: ctxLimit,
+						MaxTurns:     harnessCore.MaxTurns,
+					}, "")
+					if err == nil {
+						sess = newSess
+						if harnessSession.OnActiveSession != nil {
+							harnessSession.OnActiveSession(newSess.UID)
+						}
+					}
+				} else {
+					sess.Model = selected
+				}
+
+				sess.Provider = selectedProvider
+				sess.Model = selected
+				if selectedContext > 0 {
+					sess.ContextLimit = selectedContext
+				}
+
+				tui.NotifyModelChanged(agentConf.Provider, agentConf.Model)
+			}
+
+			return tui.AgentResult{}, nil
+		}
 		if msg == "/resume" || strings.HasPrefix(msg, "/resume ") {
 			next, lines := resumeSession(sess, strings.TrimSpace(strings.TrimPrefix(msg, "/resume")))
 			if next != nil {

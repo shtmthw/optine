@@ -5,11 +5,13 @@ import (
 	"context"
 	"io"
 	"log"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattthew/optine/internal/approval"
 	"github.com/mattthew/optine/internal/harnessSession"
+	"github.com/mattthew/optine/internal/provider"
 )
 
 // Run launches the Bubble Tea front-end for the agent interface.
@@ -18,6 +20,9 @@ import (
 // log.Println (provider replies, tool call requests, approval prompts, ...)
 // is forwarded into the TUI, and approval answers typed by the user are
 // handed back to the harness through the shared reader.
+var activeProgram *tea.Program
+var activePickerResult chan string
+
 func Run(provider string, modelName string, workdir string, resume []Message, agent AgentFunc) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -37,6 +42,8 @@ func Run(provider string, modelName string, workdir string, resume []Message, ag
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+
+	activeProgram = program
 
 	// The harness asks for a human answer; route that to the program. This
 	// replaces an old substring match on the log text ("Allow?"), which
@@ -61,6 +68,14 @@ func Run(provider string, modelName string, workdir string, resume []Message, ag
 		close(doneCh)
 		approval.Set(nil)
 		harnessSession.OnActiveSession = nil
+		if activePickerResult != nil {
+			select {
+			case activePickerResult <- "":
+			default:
+			}
+			activePickerResult = nil
+		}
+		activeProgram = nil
 	}()
 
 	_, err := program.Run()
@@ -135,4 +150,30 @@ func (l *lineSource) Read(p []byte) (int, error) {
 	l.rest = l.rest[n:]
 
 	return n, nil
+}
+
+// PickModel opens the interactive model picker in the active TUI and blocks
+// until the user selects a model or cancels. It returns the selected model ID
+// and whether that model supports tool calling. A cancelled, empty, or
+// unavailable selection returns ("", false).
+func PickModel(models []string) (string, bool) {
+	if len(models) == 0 {
+		return "", false
+	}
+	prog := activeProgram
+	if prog == nil {
+		return "", false
+	}
+	result := make(chan string, 1)
+	prog.Send(modelPickerOpenMsg{models: models, result: result})
+	selected, ok := <-result
+	if !ok || selected == "" {
+		return "", false
+	}
+	for _, model := range provider.AllOpenrouterModels {
+		if model.ID == selected {
+			return selected, slices.Contains(model.SupportedParameters, "tools")
+		}
+	}
+	return selected, false
 }

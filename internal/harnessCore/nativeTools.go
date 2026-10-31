@@ -16,6 +16,7 @@ import (
 	"github.com/mattthew/optine/internal/dataTypes"
 
 	"github.com/mattthew/optine/internal/harnessDispatch"
+	"github.com/mattthew/optine/internal/harnessPermissions"
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
@@ -31,6 +32,14 @@ const MaxTurns = 55
 
 // baseTurns is the starting turn budget.
 const baseTurns = 10
+
+const (
+	maxErrorBodyBytes = 4 << 10  // cap on provider error text read and surfaced
+	maxDrainBytes     = 64 << 10 // cap on leftover bytes drained to allow connection reuse
+)
+
+// ErrRateLimited is matched (via errors.Is) by any HTTP 429 from the provider.
+var ErrRateLimited = errors.New("provider rate limit exceeded")
 
 // extendTurns grants one extra turn without exceeding MaxTurns.
 func extendTurns(turns int) int {
@@ -58,7 +67,7 @@ func handleMalformedBody(badBodies *int, err error) (correction string, abort er
 var (
 	ErrMaxInferenceCalls = errors.New("maximum inference calls exceeded without an answer")
 	ErrEmptyFinalAnswer  = errors.New("provider returned an empty final answer")
-	ErrNoChoices         = errors.New("vLLM returned no choices")
+	ErrNoChoices         = errors.New("provider returned no choices")
 )
 
 var providerHTTPClient = &http.Client{
@@ -72,7 +81,14 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 		return ollamaToolLoop(ctx, reader, modelName, sess)
 
 	case "vLLM":
-		return vllmToolLoop(ctx, reader, modelName, sess)
+		return openAiToolLoop(ctx, reader, modelName, sess, "http://localhost:8000/v1/chat/completions", "")
+
+	case "Openrouter":
+		key, err := harnessPermissions.GetAPIKey("openrouter")
+		if err != nil {
+			return "", err
+		}
+		return openAiToolLoop(ctx, reader, modelName, sess, "https://openrouter.ai/api/v1/chat/completions", key)
 
 	default:
 		return "", fmt.Errorf("unsupported provider %q", provider)
@@ -139,14 +155,14 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 	return "", ErrMaxInferenceCalls
 }
 
-func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
-	history := sess.VLLM()
+func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session, chatURL string, apiKey string) (string, error) {
+	history := sess.OpenAI()
 
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
-		var response dataTypes.VLLMNChatResponse
-		err := postJSON(ctx, vLLMChatURL, produceVLLMReqBody(*history, modelName), &response)
+		var response dataTypes.OpenAIChatResponse
+		err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -154,8 +170,8 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 					return "", abort
 				}
 				turns = extendTurns(turns)
-				log.Printf("vllm turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
-				*history = append(*history, &dataTypes.VLLMTooltypeMessage{Role: "user", Content: correction})
+				log.Printf("openai turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
+				*history = append(*history, &dataTypes.OpenAIChatMessage{Role: "user", Content: correction})
 				continue
 			}
 			return "", err
@@ -173,7 +189,7 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 		arguments := make([]map[string]any, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
-			arguments[i], err = decodeVLLMArguments(toolCall.Function.Arguments)
+			arguments[i], err = decodeOpenAIArguments(toolCall.Function.Arguments)
 			if err != nil {
 				return "", fmt.Errorf("tool call %q: %w", toolCall.Function.Name, err)
 			}
@@ -199,11 +215,11 @@ func vllmToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, s
 			results[i] = runTool(ctx, reader, toolCall.Function.Name, arguments[i])
 		}
 
-		block := make([]*dataTypes.VLLMTooltypeMessage, 0, 1+len(reply.ToolCalls))
+		block := make([]*dataTypes.OpenAIChatMessage, 0, 1+len(reply.ToolCalls))
 		block = append(block, reply)
 
 		for i, toolCall := range reply.ToolCalls {
-			block = append(block, &dataTypes.VLLMTooltypeMessage{
+			block = append(block, &dataTypes.OpenAIChatMessage{
 				Role:       "tool",
 				ToolCallID: toolCall.ID,
 				Content:    results[i],
@@ -251,7 +267,7 @@ func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments m
 }
 
 // decodeVLLMArguments decodes vLLM's JSON-string tool arguments.
-func decodeVLLMArguments(raw string) (map[string]any, error) {
+func decodeOpenAIArguments(raw string) (map[string]any, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
@@ -274,8 +290,8 @@ func produceOllamaReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName
 	}
 }
 
-func produceVLLMReqBody(messages []*dataTypes.VLLMTooltypeMessage, modelName string) dataTypes.VLLMNChatRequest {
-	return dataTypes.VLLMNChatRequest{
+func produceOpenAIReqBody(messages []*dataTypes.OpenAIChatMessage, modelName string) dataTypes.OpenAIChatRequest {
+	return dataTypes.OpenAIChatRequest{
 		Model:    modelName,
 		Messages: messages,
 		Stream:   false,
@@ -288,45 +304,92 @@ func produceVLLMReqBody(messages []*dataTypes.VLLMTooltypeMessage, modelName str
 
 // postJSON posts payload as JSON and decodes the response into out.
 func postJSON(ctx context.Context, providerURL string, payload any, out any) error {
-	data, err := json.Marshal(payload)
+	return postJSONAuthorized(ctx, providerURL, "", payload, out)
+}
+
+// postJSONAuthorized POSTs payload as JSON, adding bearer auth when apiKey is non-empty, and decodes a 200 response into out.
+// A 200 body that can't be decoded into out matches ErrMalformedJSON.
+func postJSONAuthorized(ctx context.Context, providerURL, apiKey string, payload, out any) error {
+	reqBody, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshalling provider request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		providerURL,
-		bytes.NewReader(data),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, providerURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("building provider request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("X-Title", "optine")
+	}
 
 	resp, err := providerHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("calling provider: %w", err)
 	}
-
 	defer func() {
+		// Drain a bounded amount so the connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(
-			"provider returned HTTP %d: %s",
-			resp.StatusCode,
-			strings.TrimSpace(string(errBody)),
-		)
+		return providerError(resp)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return ErrMalformedJSON
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading provider response: %w", err)
+	}
 
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return fmt.Errorf("%w: %w", ErrMalformedJSON, err)
 	}
 
 	return nil
+}
+
+// providerError builds an error from a non-200 response.
+func providerError(resp *http.Response) error {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	if err != nil {
+		return fmt.Errorf("reading provider error response (HTTP %d): %w", resp.StatusCode, err)
+	}
+
+	detail := errorDetail(body)
+	if detail == "" {
+		detail = strings.TrimSpace(string(body))
+	}
+
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		return fmt.Errorf("Providers server is unavailable, status: %d", resp.StatusCode)
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if detail == "" {
+			return ErrRateLimited
+		}
+		return fmt.Errorf("%w: %s", ErrRateLimited, detail)
+	}
+
+	if detail == "" {
+		return fmt.Errorf("provider returned HTTP %d", resp.StatusCode)
+	}
+	return fmt.Errorf("provider returned HTTP %d: %s", resp.StatusCode, detail)
+}
+
+// errorDetail extracts a human-readable message from an OpenRouter-style error
+// envelope, or returns "" if the body isn't one.
+func errorDetail(body []byte) string {
+	var env dataTypes.OpenRouterErrorResponse
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ""
+	}
+	if msg := strings.TrimSpace(env.Error.Message); msg != "" {
+		return msg
+	}
+	return strings.TrimSpace(env.Error.Metadata.RemedyHint)
 }
