@@ -79,7 +79,7 @@ func TestOpenRouterLoopToolCallRoundTrip(t *testing.T) {
 	if firstRole != "system" || strings.TrimSpace(firstContent) == "" {
 		t.Fatalf("system prompt not prepended to the request: role=%q", firstRole)
 	}
-	for i, msg := range *sess.OpenAIChatCompletions() {
+	for i, msg := range sess.Messages {
 		if msg.Role == "system" {
 			t.Fatalf("system prompt leaked into session history at index %d", i)
 		}

@@ -3,8 +3,6 @@ package harnessSession
 import (
 	"encoding/json"
 	"strings"
-
-	"github.com/mattthew/optine/internal/dataTypes"
 )
 
 // TranscriptRole is the display role of one previous turn.
@@ -28,50 +26,35 @@ const (
 	envelopeRetryPrefix = "Your last reply was not a valid tool-call envelope."
 )
 
-// Transcript projects the active history into user and assistant turns.
+// Transcript projects the stored history into user and assistant turns.
 // System prompts, tool traffic, tool-call turns and retry notices are omitted.
 func (s *Session) Transcript() []TranscriptEntry {
 	if s == nil {
 		return nil
 	}
 
-	switch s.Kind {
-	case OllamaNative:
-		return ollamaTranscript(s.ollamaNative)
-	case OpenAICompatNative:
-		return openAITranscript(s.openAIChatCompletions)
-	case Envelope:
-		return envelopeTranscript(s.envelope)
-	}
+	entries := make([]TranscriptEntry, 0, len(s.Messages))
 
-	return nil
-}
-
-func ollamaTranscript(messages []*dataTypes.NativeTooltypeMessage) []TranscriptEntry {
-	entries := make([]TranscriptEntry, 0, len(messages))
-
-	for _, msg := range messages {
-		if msg == nil || len(msg.ToolCalls) > 0 || isRetryNotice(msg.Content) {
+	for _, msg := range s.Messages {
+		if len(msg.ToolCalls) > 0 || msg.Role == "tool" || isRetryNotice(msg.Content) {
 			continue
 		}
 
-		role, ok := transcriptRole(msg.Role, msg.Content)
-		if !ok {
+		// The envelope protocol stores tool output as a user turn.
+		if msg.Role == "user" && isToolResult(msg.Content) {
 			continue
 		}
 
-		entries = append(entries, TranscriptEntry{Role: role, Content: msg.Content})
-	}
-
-	return entries
-}
-
-func openAITranscript(messages []*dataTypes.OpenAIChatMessage) []TranscriptEntry {
-	entries := make([]TranscriptEntry, 0, len(messages))
-
-	for _, msg := range messages {
-		if msg == nil || len(msg.ToolCalls) > 0 || isRetryNotice(msg.Content) {
-			continue
+		if msg.Role == "assistant" {
+			switch envelopeType(msg.Content) {
+			case "final_answer":
+				if content, ok := envelopeAnswer(msg.Content); ok {
+					entries = append(entries, TranscriptEntry{Role: TranscriptAssistant, Content: content})
+				}
+				continue
+			case "tool_call":
+				continue
+			}
 		}
 
 		role, ok := transcriptRole(msg.Role, msg.Content)
@@ -107,56 +90,39 @@ func isRetryNotice(content string) bool {
 		strings.HasPrefix(content, envelopeRetryPrefix)
 }
 
-func envelopeTranscript(messages []*dataTypes.NonNativeMessage) []TranscriptEntry {
-	entries := make([]TranscriptEntry, 0, len(messages))
-
-	for _, msg := range messages {
-		if msg == nil || isRetryNotice(msg.Content) {
-			continue
-		}
-
-		switch msg.Role {
-		case "user":
-			// Tool output is stored as a user turn on the envelope path.
-			if isToolResult(msg.Content) {
-				continue
-			}
-
-			if role, ok := transcriptRole(msg.Role, msg.Content); ok {
-				entries = append(entries, TranscriptEntry{Role: role, Content: msg.Content})
-			}
-
-		case "assistant":
-			content, ok := envelopeAnswer(msg.Content)
-			if !ok {
-				continue
-			}
-
-			entries = append(entries, TranscriptEntry{Role: TranscriptAssistant, Content: content})
-		}
-	}
-
-	return entries
-}
-
 func isToolResult(content string) bool {
 	return strings.HasPrefix(strings.TrimSpace(content), "TOOL_RESULT")
 }
 
-// envelopeAnswer returns the content of a final_answer envelope.
-func envelopeAnswer(raw string) (string, bool) {
+func stripEnvelopeFences(raw string) string {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
 	raw = strings.TrimPrefix(raw, "```")
 	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
 
+	return strings.TrimSpace(raw)
+}
+
+func envelopeType(raw string) string {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+
+	if err := json.Unmarshal([]byte(stripEnvelopeFences(raw)), &envelope); err != nil {
+		return ""
+	}
+
+	return envelope.Type
+}
+
+// envelopeAnswer returns the content of a final_answer envelope.
+func envelopeAnswer(raw string) (string, bool) {
 	var envelope struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
 	}
 
-	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(stripEnvelopeFences(raw)), &envelope); err != nil {
 		return "", false
 	}
 

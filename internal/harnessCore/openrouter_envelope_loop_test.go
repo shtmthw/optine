@@ -128,7 +128,7 @@ func TestOpenRouterEnvelopeLoopToolCallRoundTrip(t *testing.T) {
 	if firstRole != "system" || strings.TrimSpace(firstContent) == "" {
 		t.Fatalf("system prompt not prepended to the envelope request: role=%q", firstRole)
 	}
-	for i, msg := range *sess.Envelope() {
+	for i, msg := range sess.Messages {
 		if msg.Role == "system" {
 			t.Fatalf("system prompt leaked into session history at index %d", i)
 		}

@@ -97,7 +97,7 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 }
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
-	history := sess.OllamaNative()
+	history := &sess.Messages
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
@@ -112,7 +112,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				}
 				turns = extendTurns(turns)
 				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn+1, badBodies, maxBadBodies)
-				*history = append(*history, &dataTypes.NativeTooltypeMessage{Role: "user", Content: correction})
+				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
 				continue
 			}
 			return "", err
@@ -120,7 +120,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		badBodies = 0
 		sess.RecordPromptTokens(response.PromptEvalCount)
 
-		reply := &response.Message
+		reply := messageFromOllama(response.Message)
 
 		if len(reply.ToolCalls) == 0 {
 			if strings.TrimSpace(reply.Content) == "" {
@@ -136,14 +136,14 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		results := make([]string, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
-			results[i] = runTool(ctx, reader, toolCall.Function.Name, toolCall.Function.Arguments)
+			results[i] = runTool(ctx, reader, toolCall.Name, toolCall.Arguments)
 		}
 
-		block := make([]*dataTypes.NativeTooltypeMessage, 0, 1+len(reply.ToolCalls))
+		block := make([]harnessSession.Message, 0, 1+len(reply.ToolCalls))
 		block = append(block, reply)
 
 		for i, toolCall := range reply.ToolCalls {
-			block = append(block, &dataTypes.NativeTooltypeMessage{
+			block = append(block, harnessSession.Message{
 				Role:       "tool",
 				ToolCallID: toolCall.ID,
 				Content:    results[i],
@@ -158,7 +158,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session, chatURL string, apiKey string) (string, error) {
 
-	history := sess.OpenAIChatCompletions()
+	history := &sess.Messages
 
 	turns := baseTurns
 	badBodies := 0
@@ -173,7 +173,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				}
 				turns = extendTurns(turns)
 				log.Printf("openai turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
-				*history = append(*history, &dataTypes.OpenAIChatMessage{Role: "user", Content: correction})
+				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
 				continue
 			}
 			return "", err
@@ -185,16 +185,9 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			return "", ErrNoChoices
 		}
 
-		reply := &response.Choices[0].Message
-
-		// vLLM sends tool-call arguments as a JSON string.
-		arguments := make([]map[string]any, len(reply.ToolCalls))
-
-		for i, toolCall := range reply.ToolCalls {
-			arguments[i], err = decodeOpenAIArguments(toolCall.Function.Arguments)
-			if err != nil {
-				return "", fmt.Errorf("tool call %q: %w", toolCall.Function.Name, err)
-			}
+		reply, arguments, err := messageFromOpenAI(response.Choices[0].Message)
+		if err != nil {
+			return "", err
 		}
 
 		// A tool-calling turn carries empty content, so tool calls have to be
@@ -214,14 +207,14 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		results := make([]string, len(reply.ToolCalls))
 
 		for i, toolCall := range reply.ToolCalls {
-			results[i] = runTool(ctx, reader, toolCall.Function.Name, arguments[i])
+			results[i] = runTool(ctx, reader, toolCall.Name, arguments[i])
 		}
 
-		block := make([]*dataTypes.OpenAIChatMessage, 0, 1+len(reply.ToolCalls))
+		block := make([]harnessSession.Message, 0, 1+len(reply.ToolCalls))
 		block = append(block, reply)
 
 		for i, toolCall := range reply.ToolCalls {
-			block = append(block, &dataTypes.OpenAIChatMessage{
+			block = append(block, harnessSession.Message{
 				Role:       "tool",
 				ToolCallID: toolCall.ID,
 				Content:    results[i],
@@ -283,12 +276,16 @@ func decodeOpenAIArguments(raw string) (map[string]any, error) {
 	return arguments, nil
 }
 
-func produceOllamaReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName string, systemPrompt string) dataTypes.NativeToolChatRequest {
-	var allMessages []*dataTypes.NativeTooltypeMessage
+func produceOllamaReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.NativeToolChatRequest {
+	allMessages := make([]*dataTypes.NativeTooltypeMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
 		allMessages = append(allMessages, &dataTypes.NativeTooltypeMessage{Role: "system", Content: systemPrompt})
 	}
-	allMessages = append(allMessages, messages...)
+
+	for _, msg := range messages {
+		allMessages = append(allMessages, ollamaWireMessage(msg))
+	}
+
 	return dataTypes.NativeToolChatRequest{
 		Model:    modelName,
 		Messages: allMessages,
@@ -297,12 +294,67 @@ func produceOllamaReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName
 	}
 }
 
-func produceOpenAIReqBody(messages []*dataTypes.OpenAIChatMessage, modelName string, systemPrompt string) dataTypes.OpenAIChatRequest {
-	var allMessages []*dataTypes.OpenAIChatMessage
+func ollamaWireMessage(msg harnessSession.Message) *dataTypes.NativeTooltypeMessage {
+	calls := make([]dataTypes.NativeTypeToolCall, len(msg.ToolCalls))
+	for i, call := range msg.ToolCalls {
+		wire := dataTypes.NativeTypeToolCall{ID: call.ID}
+		wire.Function.Name = call.Name
+		wire.Function.Arguments = call.Arguments
+		calls[i] = wire
+	}
+
+	return &dataTypes.NativeTooltypeMessage{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolCalls:  calls,
+		ToolCallID: msg.ToolCallID,
+	}
+}
+
+func produceOpenAIReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.OpenAIChatRequest {
+	allMessages := make([]*dataTypes.OpenAIChatMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
 		allMessages = append(allMessages, &dataTypes.OpenAIChatMessage{Role: "system", Content: systemPrompt})
 	}
-	allMessages = append(allMessages, messages...)
+
+	// Ollama call ids are optional; OpenAI requires one per call and a matching
+	// tool_call_id on every tool reply. Synthesize them at the wire boundary so
+	// a session resumed on a different provider still produces a valid request.
+	var pending []string
+	for _, msg := range messages {
+		wire := &dataTypes.OpenAIChatMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+		}
+
+		if msg.Role != "tool" {
+			pending = nil
+		}
+
+		for i, call := range msg.ToolCalls {
+			id := call.ID
+			if id == "" {
+				id = fmt.Sprintf("call_%d_%d", len(allMessages), i)
+			}
+			pending = append(pending, id)
+
+			wireCall := dataTypes.OpenAITypeToolCall{ID: id, Type: "function"}
+			wireCall.Function.Name = call.Name
+			wireCall.Function.Arguments = encodeOpenAIArguments(call.Arguments)
+			wire.ToolCalls = append(wire.ToolCalls, wireCall)
+		}
+
+		if msg.Role == "tool" && len(pending) > 0 {
+			if wire.ToolCallID == "" {
+				wire.ToolCallID = pending[0]
+			}
+			pending = pending[1:]
+		}
+
+		allMessages = append(allMessages, wire)
+	}
+
 	return dataTypes.OpenAIChatRequest{
 		Model:      modelName,
 		Messages:   allMessages,
@@ -310,6 +362,63 @@ func produceOpenAIReqBody(messages []*dataTypes.OpenAIChatMessage, modelName str
 		Tools:      nativeTools(),
 		ToolChoice: "auto",
 	}
+}
+
+func encodeOpenAIArguments(arguments map[string]any) string {
+	if arguments == nil {
+		return "{}"
+	}
+
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		return "{}"
+	}
+
+	return string(encoded)
+}
+
+func messageFromOllama(msg dataTypes.NativeTooltypeMessage) harnessSession.Message {
+	calls := make([]harnessSession.ToolCall, len(msg.ToolCalls))
+	for i, call := range msg.ToolCalls {
+		calls[i] = harnessSession.ToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+		}
+	}
+
+	return harnessSession.Message{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolCalls:  calls,
+		ToolCallID: msg.ToolCallID,
+	}
+}
+
+func messageFromOpenAI(msg dataTypes.OpenAIChatMessage) (harnessSession.Message, []map[string]any, error) {
+	calls := make([]harnessSession.ToolCall, len(msg.ToolCalls))
+	arguments := make([]map[string]any, len(msg.ToolCalls))
+
+	for i, call := range msg.ToolCalls {
+		decoded, err := decodeOpenAIArguments(call.Function.Arguments)
+		if err != nil {
+			return harnessSession.Message{}, nil, fmt.Errorf("tool call %q: %w", call.Function.Name, err)
+		}
+
+		arguments[i] = decoded
+		calls[i] = harnessSession.ToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: decoded,
+		}
+	}
+
+	return harnessSession.Message{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolCalls:  calls,
+		ToolCallID: msg.ToolCallID,
+	}, arguments, nil
 }
 
 // postJSON posts payload as JSON and decodes the response into out.

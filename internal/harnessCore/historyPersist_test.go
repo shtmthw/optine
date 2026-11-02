@@ -49,7 +49,7 @@ func TestOllamaLoopPersistsFinalAnswer(t *testing.T) {
 		t.Fatalf("want answer %q, got %q", "done", out)
 	}
 
-	msgs := *sess.OllamaNative()
+	msgs := sess.Messages
 	last := msgs[len(msgs)-1]
 	if last.Role != "assistant" || last.Content != "done" {
 		t.Fatalf("final assistant turn missing from history: %+v", last)
@@ -77,7 +77,7 @@ func TestVLLMLoopPersistsFinalAnswer(t *testing.T) {
 		t.Fatalf("want answer %q, got %q", "done", out)
 	}
 
-	msgs := *sess.OpenAIChatCompletions()
+	msgs := sess.Messages
 	last := msgs[len(msgs)-1]
 	if last.Role != "assistant" || last.Content != "done" {
 		t.Fatalf("final assistant turn missing from history: %+v", last)
@@ -105,7 +105,7 @@ func TestEnvelopeLoopPersistsFinalAnswer(t *testing.T) {
 		t.Fatalf("want answer %q, got %q", "done", out)
 	}
 
-	msgs := *sess.Envelope()
+	msgs := sess.Messages
 	last := msgs[len(msgs)-1]
 	if last.Role != "assistant" || !strings.Contains(last.Content, "final_answer") {
 		t.Fatalf("final assistant envelope missing from history: %+v", last)

@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/mattthew/optine/internal/dataTypes"
 )
 
 func stubSessionsDir(t *testing.T) string {
@@ -33,13 +31,13 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	sess.BeginRun()
 	sess.AppendUser("hello")
 
-	*sess.OllamaNative() = append(*sess.OllamaNative(),
-		&dataTypes.NativeTooltypeMessage{
+	sess.Messages = append(sess.Messages,
+		Message{
 			Role:      "assistant",
-			ToolCalls: []dataTypes.NativeTypeToolCall{{ID: "call_1"}},
+			ToolCalls: []ToolCall{{ID: "call_1", Name: "bash", Arguments: map[string]any{"command": "ls"}}},
 		},
-		&dataTypes.NativeTooltypeMessage{Role: "tool", ToolCallID: "call_1", Content: "result"},
-		&dataTypes.NativeTooltypeMessage{Role: "assistant", Content: "done"},
+		Message{Role: "tool", ToolCallID: "call_1", Content: "result"},
+		Message{Role: "assistant", Content: "done"},
 	)
 	sess.RecordPromptTokens(42)
 
@@ -56,6 +54,14 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"tool_call": true`) {
 		t.Fatalf("session file missing tool_call: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"messages":`) {
+		t.Fatalf("session file missing unified messages array: %s", raw)
+	}
+	for _, legacy := range []string{`"ollama-native":`, `"openai-chat-completions":`, `"envelope":`} {
+		if strings.Contains(string(raw), legacy) {
+			t.Fatalf("session file still contains legacy key %s: %s", legacy, raw)
+		}
 	}
 
 	metas, err := List("", false)
@@ -102,7 +108,7 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		t.Fatalf("telemetry lost: tokens=%d runs=%d", loaded.LastPromptTokens, loaded.RunCount)
 	}
 
-	msgs := *loaded.OllamaNative()
+	msgs := loaded.Messages
 	if msgs[3].Content != "done" {
 		t.Fatalf("history order lost: %q", msgs[3].Content)
 	}
@@ -149,9 +155,9 @@ func TestLoadRejectsOrphanedToolCall(t *testing.T) {
 		Provider: "vLLM",
 		Model:    "m",
 		RunCount: 1,
-		OpenAIChatCompletions: []*dataTypes.OpenAIChatMessage{
+		Messages: []Message{
 			{Role: "user", Content: "hi"},
-			{Role: "assistant", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}},
 		},
 	}
 
@@ -177,15 +183,24 @@ func TestLoadRejectsPathTraversal(t *testing.T) {
 	}
 }
 
-func TestVLLMPairValidationAcceptsCompletePair(t *testing.T) {
-	msgs := []*dataTypes.OpenAIChatMessage{
-		{Role: "system", Content: "sys"},
-		{Role: "assistant", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
+func TestPairValidationAcceptsCompletePair(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}},
 		{Role: "tool", ToolCallID: "call_1", Content: "ok"},
 	}
 
-	if err := validateOpenAIPairs(msgs); err != nil {
+	if err := validateToolPairs(msgs); err != nil {
 		t.Fatalf("complete pair should validate: %v", err)
+	}
+
+	// Ollama may omit call ids; the count is enough in that case.
+	msgs = []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{Name: "bash"}}},
+		{Role: "tool", Content: "ok"},
+	}
+	if err := validateToolPairs(msgs); err != nil {
+		t.Fatalf("count-only pair should validate: %v", err)
 	}
 }
 
@@ -202,7 +217,7 @@ func TestLoadReconcilesKindProviderMismatch(t *testing.T) {
 		Provider: "Openrouter",
 		Model:    "m",
 		RunCount: 1,
-		OllamaNative: []*dataTypes.NativeTooltypeMessage{
+		Messages: []Message{
 			{Role: "user", Content: "hi"},
 		},
 	}
@@ -230,17 +245,9 @@ func TestLoadReconcilesKindProviderMismatch(t *testing.T) {
 	if !strings.Contains(loaded.SystemPrompt, "notebook") {
 		t.Fatalf("reconciled system prompt lacks notebook content: %q", loaded.SystemPrompt)
 	}
-	if len(*loaded.OpenAIChatCompletions()) != 0 {
-		t.Fatalf("system prompt must stay out of the openai slot: %+v", *loaded.OpenAIChatCompletions())
-	}
 
-	// History stays put: the ollama slot keeps the user message; nothing is
-	// migrated between slots.
-	oll := *loaded.OllamaNative()
-	if len(oll) != 1 || oll[0].Role != "user" || oll[0].Content != "hi" {
-		t.Fatalf("ollama history not preserved: %+v", oll)
-	}
-	if len(*loaded.Envelope()) != 0 {
-		t.Fatalf("envelope slot should be untouched: %+v", *loaded.Envelope())
+	// History is provider-neutral and stays put across the kind change.
+	if len(loaded.Messages) != 1 || loaded.Messages[0].Role != "user" || loaded.Messages[0].Content != "hi" {
+		t.Fatalf("history not preserved on reconcile: %+v", loaded.Messages)
 	}
 }

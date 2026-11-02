@@ -14,13 +14,24 @@ import (
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
-func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string) dataTypes.NonNativeChatRequest {
+func nonNativeWireMessage(msg harnessSession.Message) *dataTypes.NonNativeMessage {
+	role := msg.Role
+	if role == "tool" {
+		role = "user"
+	}
 
-	var allMessages []*dataTypes.NonNativeMessage
+	return &dataTypes.NonNativeMessage{Role: role, Content: msg.Content}
+}
+
+func produceNonNativeReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.NonNativeChatRequest {
+
+	allMessages := make([]*dataTypes.NonNativeMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
 		allMessages = append(allMessages, &dataTypes.NonNativeMessage{Role: "system", Content: systemPrompt})
 	}
-	allMessages = append(allMessages, messages...)
+	for _, msg := range messages {
+		allMessages = append(allMessages, nonNativeWireMessage(msg))
+	}
 
 	var requestBody = dataTypes.NonNativeChatRequest{
 		Model:    modelName,
@@ -34,17 +45,19 @@ func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName s
 	return requestBody
 }
 
-func produceOpenAINonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string) dataTypes.OpenAINonNativeChatRequest {
+func produceOpenAINonNativeReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.OpenAINonNativeChatRequest {
 
 	var responseFormat = dataTypes.NonNativeResponseFormat{
 		Type: "json_object",
 	}
 
-	var allMessages []*dataTypes.NonNativeMessage
+	allMessages := make([]*dataTypes.NonNativeMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
 		allMessages = append(allMessages, &dataTypes.NonNativeMessage{Role: "system", Content: systemPrompt})
 	}
-	allMessages = append(allMessages, messages...)
+	for _, msg := range messages {
+		allMessages = append(allMessages, nonNativeWireMessage(msg))
+	}
 
 	var requestBody = dataTypes.OpenAINonNativeChatRequest{
 		Model:    modelName,
@@ -58,7 +71,7 @@ func produceOpenAINonNativeReqBody(messages []*dataTypes.NonNativeMessage, model
 	return requestBody
 }
 
-func ollamaNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string, _, _ string) (*dataTypes.NonNativeMessage, int, error) {
+func ollamaNonNativeChat(ctx context.Context, messages []harnessSession.Message, modelName string, systemPrompt string, _, _ string) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.NonNativeChatResponse
 
@@ -69,7 +82,7 @@ func ollamaNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMes
 	return &result.Message, result.PromptEvalCount, nil
 }
 
-func openAiNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string, chatURL string, apiKey string) (*dataTypes.NonNativeMessage, int, error) {
+func openAiNonNativeChat(ctx context.Context, messages []harnessSession.Message, modelName string, systemPrompt string, chatURL string, apiKey string) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.OpenAINonNativeChatResponse
 
@@ -170,7 +183,7 @@ func correctionForBadEnvelope(raw string) string {
 	)
 }
 
-type nonNativeChat func(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName, systemPrompt, chatURL, apiKey string) (*dataTypes.NonNativeMessage, int, error)
+type nonNativeChat func(ctx context.Context, messages []harnessSession.Message, modelName, systemPrompt, chatURL, apiKey string) (*dataTypes.NonNativeMessage, int, error)
 
 func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
 
@@ -196,7 +209,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 		return "", fmt.Errorf("unsupported provider %q", provider)
 	}
 
-	history := sess.Envelope()
+	history := &sess.Messages
 
 	turns := baseTurns
 	badBodies := 0
@@ -210,7 +223,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 				}
 				turns = extendTurns(turns)
 				log.Printf("non-native turn %d: malformed body (%d/%d), asking model to re-issue", turn+1, badBodies, maxBadBodies)
-				*history = append(*history, &dataTypes.NonNativeMessage{
+				*history = append(*history, harnessSession.Message{
 					Role:    "user",
 					Content: correction,
 				})
@@ -228,7 +241,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 			}
 			turns = extendTurns(turns)
 			log.Printf("non-native turn %d: malformed envelope (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
-			*history = append(*history, &dataTypes.NonNativeMessage{
+			*history = append(*history, harnessSession.Message{
 				Role:    "user",
 				Content: correctionForBadEnvelope(reply.Content),
 			})
@@ -239,17 +252,18 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 		switch aiResponse.Type {
 		case "final_answer":
 			// Keep the assistant envelope in the transcript.
-			*history = append(*history, reply)
+			*history = append(*history, harnessSession.Message{Role: reply.Role, Content: reply.Content})
 
 			return aiResponse.Content, nil
 
 		case "tool_call":
 			result := runTool(ctx, reader, aiResponse.Tool, aiResponse.Arguments)
 
-			// Keep the request and result together.
+			// Keep the request and result together. The envelope protocol has
+			// no tool role, so the result stays a user turn.
 			*history = append(*history,
-				reply,
-				&dataTypes.NonNativeMessage{
+				harnessSession.Message{Role: reply.Role, Content: reply.Content},
+				harnessSession.Message{
 					Role: "user",
 					Content: fmt.Sprintf(
 						"TOOL_RESULT\n"+

@@ -185,8 +185,8 @@ func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
 	})
 	saved.BeginRun()
 	saved.AppendUser("earlier question")
-	*saved.OllamaNative() = append(*saved.OllamaNative(),
-		&dataTypes.NativeTooltypeMessage{Role: "assistant", Content: "earlier answer"},
+	saved.Messages = append(saved.Messages,
+		harnessSession.Message{Role: "assistant", Content: "earlier answer"},
 	)
 
 	if err := harnessSession.Commit(saved); err != nil {

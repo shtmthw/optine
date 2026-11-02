@@ -130,7 +130,7 @@ func TestNonNativeMalformedHTTPBodyRecovers(t *testing.T) {
 				t.Fatalf("want 3 provider calls (2 corrections + success), got %d", got)
 			}
 
-			msgs := *sess.Envelope()
+			msgs := sess.Messages
 			last := msgs[len(msgs)-1]
 			if last.Role != "assistant" || !strings.Contains(last.Content, "final_answer") {
 				t.Fatalf("final assistant envelope missing from history: %+v", last)

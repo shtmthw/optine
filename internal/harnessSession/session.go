@@ -5,12 +5,10 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
-
-	"github.com/mattthew/optine/internal/dataTypes"
 )
 
-// Kind identifies the provider-native message format a session holds. A
-// session never switches format mid-run.
+// Kind selects the provider protocol used by the current run. Stored history
+// is provider-neutral, so a session may switch Kind between runs.
 type Kind string
 
 const (
@@ -47,6 +45,22 @@ type Config struct {
 	ToolCall bool
 }
 
+// Message is one conversation turn in provider-neutral form. The system
+// prompt lives in Session.SystemPrompt and is prepended by request builders.
+type Message struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is a provider-neutral tool invocation.
+type ToolCall struct {
+	ID        string         `json:"id,omitempty"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
 // Session owns one conversation's history and system-prompt cache. Only the
 // agent run goroutine appends; display code reads through Transcript().
 type Session struct {
@@ -73,9 +87,9 @@ type Session struct {
 
 	SystemCache systemCache
 
-	ollamaNative          []*dataTypes.NativeTooltypeMessage
-	openAIChatCompletions []*dataTypes.OpenAIChatMessage
-	envelope              []*dataTypes.NonNativeMessage
+	// Messages is the whole conversation in provider-neutral form. The system
+	// prompt lives in SystemPrompt and is prepended by request builders.
+	Messages []Message
 }
 
 // OnActiveSession is the UI bridge for the active session UID.
@@ -134,31 +148,11 @@ func (s *Session) BeginRun() {
 	}
 }
 
-// AppendUser appends the new user message to the active slot.
+// AppendUser appends the new user message to the shared history.
 func (s *Session) AppendUser(content string) {
 	s.TotalUserMessages++
-
-	switch s.Kind {
-	case OllamaNative:
-		s.ollamaNative = append(s.ollamaNative, &dataTypes.NativeTooltypeMessage{Role: "user", Content: content})
-	case OpenAICompatNative:
-		s.openAIChatCompletions = append(s.openAIChatCompletions, &dataTypes.OpenAIChatMessage{Role: "user", Content: content})
-	case Envelope:
-		s.envelope = append(s.envelope, &dataTypes.NonNativeMessage{Role: "user", Content: content})
-	}
+	s.Messages = append(s.Messages, Message{Role: "user", Content: content})
 }
-
-// The typed slot accessors return a pointer to the slice header, not a copy:
-// append may reallocate the backing array, so every write has to go back into
-// the session (the loops append through *slot for this reason).
-
-func (s *Session) OllamaNative() *[]*dataTypes.NativeTooltypeMessage { return &s.ollamaNative }
-
-func (s *Session) OpenAIChatCompletions() *[]*dataTypes.OpenAIChatMessage {
-	return &s.openAIChatCompletions
-}
-
-func (s *Session) Envelope() *[]*dataTypes.NonNativeMessage { return &s.envelope }
 
 // RecordPromptTokens stores the provider's measured prompt size. Zero keeps
 // the last known value.
@@ -168,18 +162,9 @@ func (s *Session) RecordPromptTokens(n int) {
 	}
 }
 
-// Len is the number of messages currently in the active slot.
+// Len is the number of stored messages.
 func (s *Session) Len() int {
-	switch s.Kind {
-	case OllamaNative:
-		return len(s.ollamaNative)
-	case OpenAICompatNative:
-		return len(s.openAIChatCompletions)
-	case Envelope:
-		return len(s.envelope)
-	}
-
-	return 0
+	return len(s.Messages)
 }
 
 // Resumeable reports whether this session can continue on the given loop.

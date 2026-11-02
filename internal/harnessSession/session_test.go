@@ -5,8 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/mattthew/optine/internal/dataTypes"
 )
 
 // stubSystemInputs replaces the notebook/crawler readers so tests never touch
@@ -33,24 +31,27 @@ func TestNewUIDFormat(t *testing.T) {
 	}
 }
 
-// TestPointerSlotWriteBack proves the slot accessor returns a stable handle:
-// appends through it keep landing in the session even after the backing array
-// is reallocated.
-func TestPointerSlotWriteBack(t *testing.T) {
+// TestAppendUserWritesSharedHistory proves every append lands in the one
+// provider-neutral history, regardless of Kind.
+func TestAppendUserWritesSharedHistory(t *testing.T) {
 	memory := "notes"
 	crawlers := []string{"searxng"}
 	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
 
 	sess := New(Config{Provider: "Ollama", Model: "m", Kind: OllamaNative})
-	slot := sess.OllamaNative()
-	start := len(*slot)
+	start := len(sess.Messages)
 
 	for i := 0; i < 500; i++ {
-		*slot = append(*slot, &dataTypes.NativeTooltypeMessage{Role: "user", Content: "x"})
+		sess.AppendUser("x")
 	}
 
 	if got := sess.Len(); got != start+500 {
-		t.Fatalf("want %d messages after pointer appends, got %d", start+500, got)
+		t.Fatalf("want %d messages after appends, got %d", start+500, got)
+	}
+
+	first := sess.Messages[start]
+	if first.Role != "user" || first.Content != "x" {
+		t.Fatalf("unexpected stored message: %+v", first)
 	}
 }
 
@@ -166,6 +167,9 @@ func TestReplaceSessionSysPromptSwapsAndPersists(t *testing.T) {
 	if sess.Kind != Envelope || sess.ToolCall {
 		t.Fatalf("protocol not switched: kind=%q toolCall=%v", sess.Kind, sess.ToolCall)
 	}
+	if len(sess.Messages) != 1 || sess.Messages[0].Content != "hi" {
+		t.Fatalf("protocol switch lost history: %+v", sess.Messages)
+	}
 	if !strings.Contains(sess.SystemPrompt, "you cannot run them yourself") {
 		t.Fatalf("prompt not switched: %q", sess.SystemPrompt)
 	}
@@ -176,6 +180,9 @@ func TestReplaceSessionSysPromptSwapsAndPersists(t *testing.T) {
 	}
 	if loaded.Kind != Envelope || loaded.ToolCall {
 		t.Fatalf("protocol not persisted: kind=%q toolCall=%v", loaded.Kind, loaded.ToolCall)
+	}
+	if len(loaded.Messages) != 1 || loaded.Messages[0].Content != "hi" {
+		t.Fatalf("resume lost history: %+v", loaded.Messages)
 	}
 	if !strings.Contains(loaded.SystemPrompt, "you cannot run them yourself") {
 		t.Fatalf("swapped prompt not persisted: %q", loaded.SystemPrompt)
@@ -228,6 +235,7 @@ func TestReconcileKindHealsMismatch(t *testing.T) {
 	if sess.Kind != OllamaNative {
 		t.Fatalf("initial kind %q", sess.Kind)
 	}
+	sess.AppendUser("hi")
 
 	sess.ReconcileKind()
 
@@ -244,8 +252,8 @@ func TestReconcileKindHealsMismatch(t *testing.T) {
 	if !strings.Contains(sess.SystemPrompt, "notes") {
 		t.Fatalf("reconciled system prompt lacks notebook content: %q", sess.SystemPrompt)
 	}
-	if len(*sess.OpenAIChatCompletions()) != 0 {
-		t.Fatalf("system prompt must stay out of the openai slot: %+v", *sess.OpenAIChatCompletions())
+	if len(sess.Messages) != 1 || sess.Messages[0].Content != "hi" {
+		t.Fatalf("reconcile lost history: %+v", sess.Messages)
 	}
 }
 

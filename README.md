@@ -53,8 +53,8 @@ the latest run, and /quit exits. /help lists every command.
 
 ## Sessions
 
-Each conversation is a session with its own UID. The full history, in the
-provider's native format, is saved after every run under your user config
+Each conversation is a session with its own UID. The full history, in a
+provider-neutral format, is saved after every run under your user config
 directory, for example ~/.config/optine/sessions/ on Linux, along with the
 provider, model, directory and prompt token count. Sessions are written
 atomically, so quitting early cannot leave half a file behind.
