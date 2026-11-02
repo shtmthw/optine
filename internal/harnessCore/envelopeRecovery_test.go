@@ -70,6 +70,45 @@ func TestNonNativeMalformedEnvelopeAbortsAfterBudget(t *testing.T) {
 	}
 }
 
+func TestParseNonNativeResponseArguments(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    any
+		wantErr bool
+	}{
+		{"object", `{"type":"tool_call","tool":"bash","arguments":{"command":"ls"}}`, "ls", false},
+		{"stringified", `{"type":"tool_call","tool":"bash","arguments":"{\"command\":\"ls\"}"}`, "ls", false},
+		{"missing", `{"type":"tool_call","tool":"bash"}`, nil, false},
+		{"null", `{"type":"tool_call","tool":"bash","arguments":null}`, nil, false},
+		{"invalid", `{"type":"tool_call","tool":"bash","arguments":42}`, nil, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response, err := parseNonNativeResponse(tc.content)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("want error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if tc.want == nil {
+				if len(response.Arguments) != 0 {
+					t.Fatalf("want no arguments, got %+v", response.Arguments)
+				}
+				return
+			}
+			if response.Arguments["command"] != tc.want {
+				t.Fatalf("arguments = %+v, want command %q", response.Arguments, tc.want)
+			}
+		})
+	}
+}
+
 func TestCorrectionForBadEnvelope(t *testing.T) {
 	raw := "```json\n" + strings.Repeat("x", maxEnvelopeExcerpt+100)
 	out := correctionForBadEnvelope(raw)

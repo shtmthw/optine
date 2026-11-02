@@ -14,9 +14,25 @@ import (
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
-// TestOllamaToolLoopCancellation proves a canceled context aborts an
-// in-flight inference call instead of running until the client timeout.
 func TestOllamaToolLoopCancellation(t *testing.T) {
+	runCancellationTest(t, &ollamaChatURL, func(ctx context.Context, reader *bufio.Reader) error {
+		_, err := ollamaToolLoop(ctx, reader, "test-model", testSession(t, harnessSession.OllamaNative))
+		return err
+	})
+}
+
+func TestNonNativeLoopCancellation(t *testing.T) {
+	runCancellationTest(t, &ollamaChatURL, func(ctx context.Context, reader *bufio.Reader) error {
+		_, err := nonNativeAgentCall(ctx, testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
+		return err
+	})
+}
+
+// runCancellationTest proves a canceled context aborts an in-flight inference
+// call instead of running until the client timeout.
+func runCancellationTest(t *testing.T, urlVar *string, run func(context.Context, *bufio.Reader) error) {
+	t.Helper()
+
 	var (
 		serverCtx context.Context
 		serverMu  sync.Mutex
@@ -50,17 +66,16 @@ func TestOllamaToolLoopCancellation(t *testing.T) {
 		srv.Close()
 	})
 
-	old := ollamaChatURL
-	ollamaChatURL = srv.URL
-	t.Cleanup(func() { ollamaChatURL = old })
+	old := *urlVar
+	*urlVar = srv.URL
+	t.Cleanup(func() { *urlVar = old })
 
 	reader := bufio.NewReader(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	resultErr := make(chan error, 1)
 	go func() {
-		_, err := ollamaToolLoop(ctx, reader, "test-model", testSession(t, harnessSession.OllamaNative))
-		resultErr <- err
+		resultErr <- run(ctx, reader)
 	}()
 
 	// Wait until the fake server has seen the request.

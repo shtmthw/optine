@@ -29,6 +29,7 @@ func TestAgentLoopKeepsGitBackendWhenGitIsUnavailable(t *testing.T) {
 		Kind:      harnessSession.OllamaNative,
 		MaxTurns:  MaxTurns,
 		GitStatus: true,
+		ToolCall:  true,
 	})
 
 	_, err := AgentLoop(

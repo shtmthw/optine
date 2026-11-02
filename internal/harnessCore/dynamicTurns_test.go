@@ -239,3 +239,49 @@ func TestVLLMEnvelopeLoopStopsAtMaxTurns(t *testing.T) {
 		t.Fatalf("want %d provider calls, got %d", MaxTurns, got)
 	}
 }
+
+func TestOpenRouterEnvelopeLoopGrowsPastBaseTurns(t *testing.T) {
+	stubOpenRouterAuth(t, "secret")
+
+	calls := scriptedJSONServer(t, &openRouterChatURL, func(call int64) string {
+		if call <= dynamicToolRounds {
+			return vllmEnvelopeBody(envelopeToolCall)
+		}
+
+		return vllmEnvelopeBody(envelopeFinalAnswer)
+	})
+
+	reader := bufio.NewReader(strings.NewReader(""))
+
+	out, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Openrouter", "test-model")
+	if err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+
+	if out != "done" {
+		t.Fatalf("want answer %q, got %q", "done", out)
+	}
+
+	if got := atomic.LoadInt64(calls); got != dynamicToolRounds+1 {
+		t.Fatalf("want %d provider calls, got %d", dynamicToolRounds+1, got)
+	}
+}
+
+func TestOpenRouterEnvelopeLoopStopsAtMaxTurns(t *testing.T) {
+	stubOpenRouterAuth(t, "secret")
+
+	calls := scriptedJSONServer(t, &openRouterChatURL, func(int64) string {
+		return vllmEnvelopeBody(envelopeToolCall)
+	})
+
+	reader := bufio.NewReader(strings.NewReader(""))
+
+	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Openrouter", "test-model")
+	if !errors.Is(err, ErrMaxInferenceCalls) {
+		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
+	}
+
+	if got := atomic.LoadInt64(calls); got != MaxTurns {
+		t.Fatalf("want %d provider calls, got %d", MaxTurns, got)
+	}
+}

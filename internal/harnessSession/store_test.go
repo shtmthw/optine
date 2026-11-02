@@ -29,11 +29,11 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	crawlers := []string{"searxng"}
 	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
 
-	sess := New(Config{Provider: "Ollama", Model: "m", Directory: "/home/matthew/optine", Kind: OllamaNative, GitStatus: true})
+	sess := New(Config{Provider: "Ollama", Model: "m", Directory: "/home/matthew/optine", Kind: OllamaNative, GitStatus: true, ToolCall: true})
 	sess.BeginRun()
 	sess.AppendUser("hello")
 
-	*sess.Ollama() = append(*sess.Ollama(),
+	*sess.OllamaNative() = append(*sess.OllamaNative(),
 		&dataTypes.NativeTooltypeMessage{
 			Role:      "assistant",
 			ToolCalls: []dataTypes.NativeTypeToolCall{{ID: "call_1"}},
@@ -54,6 +54,9 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	if !strings.Contains(string(raw), `"total_user_messages": 1`) {
 		t.Fatalf("session file missing total_user_messages: %s", raw)
 	}
+	if !strings.Contains(string(raw), `"tool_call": true`) {
+		t.Fatalf("session file missing tool_call: %s", raw)
+	}
 
 	metas, err := List("", false)
 	if err != nil {
@@ -65,6 +68,9 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	}
 	if !metas[0].GitStatus {
 		t.Fatal("git status lost in listing")
+	}
+	if !metas[0].ToolCall {
+		t.Fatal("tool call lost in listing")
 	}
 	if metas[0].TotalUserMessages != 1 {
 		t.Fatalf("user message count lost in listing: %d", metas[0].TotalUserMessages)
@@ -81,6 +87,9 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	if !loaded.GitStatus {
 		t.Fatal("git status lost on load")
 	}
+	if !loaded.ToolCall {
+		t.Fatal("tool call lost on load")
+	}
 	if loaded.TotalUserMessages != 1 {
 		t.Fatalf("user message count lost on load: %d", loaded.TotalUserMessages)
 	}
@@ -93,13 +102,18 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		t.Fatalf("telemetry lost: tokens=%d runs=%d", loaded.LastPromptTokens, loaded.RunCount)
 	}
 
-	msgs := *loaded.Ollama()
-	if msgs[4].Content != "done" {
-		t.Fatalf("history order lost: %q", msgs[4].Content)
+	msgs := *loaded.OllamaNative()
+	if msgs[3].Content != "done" {
+		t.Fatalf("history order lost: %q", msgs[3].Content)
 	}
 
-	if !strings.Contains(msgs[0].Content, "notebook") {
-		t.Fatalf("system message was not refreshed from the notebook: %q", msgs[0].Content)
+	if !strings.Contains(loaded.SystemPrompt, "notebook") {
+		t.Fatalf("system prompt was not refreshed from the notebook: %q", loaded.SystemPrompt)
+	}
+	for i, msg := range msgs {
+		if msg.Role == "system" {
+			t.Fatalf("system prompt must not live in the message array (index %d)", i)
+		}
 	}
 }
 
@@ -135,8 +149,7 @@ func TestLoadRejectsOrphanedToolCall(t *testing.T) {
 		Provider: "vLLM",
 		Model:    "m",
 		RunCount: 1,
-		OpenAICompat: []*dataTypes.OpenAIChatMessage{
-			{Role: "system", Content: "sys"},
+		OpenAIChatCompletions: []*dataTypes.OpenAIChatMessage{
 			{Role: "user", Content: "hi"},
 			{Role: "assistant", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
 		},
@@ -173,5 +186,61 @@ func TestVLLMPairValidationAcceptsCompletePair(t *testing.T) {
 
 	if err := validateOpenAIPairs(msgs); err != nil {
 		t.Fatalf("complete pair should validate: %v", err)
+	}
+}
+
+func TestLoadReconcilesKindProviderMismatch(t *testing.T) {
+	dir := stubSessionsDir(t)
+
+	memory := "notebook"
+	crawlers := []string{"searxng"}
+	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
+
+	broken := sessionFile{
+		UID:      "s2",
+		Kind:     OllamaNative,
+		Provider: "Openrouter",
+		Model:    "m",
+		RunCount: 1,
+		OllamaNative: []*dataTypes.NativeTooltypeMessage{
+			{Role: "user", Content: "hi"},
+		},
+	}
+
+	data, err := json.Marshal(broken)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "s2.json"), data, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	loaded, err := Load("s2")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Kind != OpenAICompatNative {
+		t.Fatalf("kind not reconciled: %q", loaded.Kind)
+	}
+	if loaded.Provider != "Openrouter" {
+		t.Fatalf("provider changed on reconcile: %q", loaded.Provider)
+	}
+
+	// The prompt is rebuilt for the reconciled protocol and stays top-level.
+	if !strings.Contains(loaded.SystemPrompt, "notebook") {
+		t.Fatalf("reconciled system prompt lacks notebook content: %q", loaded.SystemPrompt)
+	}
+	if len(*loaded.OpenAIChatCompletions()) != 0 {
+		t.Fatalf("system prompt must stay out of the openai slot: %+v", *loaded.OpenAIChatCompletions())
+	}
+
+	// History stays put: the ollama slot keeps the user message; nothing is
+	// migrated between slots.
+	oll := *loaded.OllamaNative()
+	if len(oll) != 1 || oll[0].Role != "user" || oll[0].Content != "hi" {
+		t.Fatalf("ollama history not preserved: %+v", oll)
+	}
+	if len(*loaded.Envelope()) != 0 {
+		t.Fatalf("envelope slot should be untouched: %+v", *loaded.Envelope())
 	}
 }

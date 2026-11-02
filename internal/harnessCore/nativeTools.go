@@ -23,8 +23,9 @@ import (
 var ErrMalformedJSON = fmt.Errorf("the model sent a malformed JSON, skip tool calls and tell the model to retry its previous task")
 
 var (
-	ollamaChatURL = "http://localhost:11434/api/chat"
-	vLLMChatURL   = "http://localhost:8000/v1/chat/completions"
+	ollamaChatURL     = "http://localhost:11434/api/chat"
+	vLLMChatURL       = "http://localhost:8000/v1/chat/completions"
+	openRouterChatURL = "https://openrouter.ai/api/v1/chat/completions"
 )
 
 // MaxTurns caps the number of inference calls in one run.
@@ -88,7 +89,7 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 		if err != nil {
 			return "", err
 		}
-		return openAiToolLoop(ctx, reader, modelName, sess, "https://openrouter.ai/api/v1/chat/completions", key)
+		return openAiToolLoop(ctx, reader, modelName, sess, openRouterChatURL, key)
 
 	default:
 		return "", fmt.Errorf("unsupported provider %q", provider)
@@ -96,13 +97,13 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 }
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
-	history := sess.Ollama()
+	history := sess.OllamaNative()
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
 
-		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName), &response)
+		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName, sess.SystemPrompt), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -110,7 +111,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 					return "", abort
 				}
 				turns = extendTurns(turns)
-				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
+				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn+1, badBodies, maxBadBodies)
 				*history = append(*history, &dataTypes.NativeTooltypeMessage{Role: "user", Content: correction})
 				continue
 			}
@@ -156,13 +157,14 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 }
 
 func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session, chatURL string, apiKey string) (string, error) {
-	history := sess.OpenAI()
+
+	history := sess.OpenAIChatCompletions()
 
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.OpenAIChatResponse
-		err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName), &response)
+		err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -266,7 +268,7 @@ func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments m
 	return result
 }
 
-// decodeVLLMArguments decodes vLLM's JSON-string tool arguments.
+// decodeOpenAIArguments decodes openAI based JSON-string tool arguments.
 func decodeOpenAIArguments(raw string) (map[string]any, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
@@ -281,23 +283,31 @@ func decodeOpenAIArguments(raw string) (map[string]any, error) {
 	return arguments, nil
 }
 
-func produceOllamaReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName string) dataTypes.NativeToolChatRequest {
+func produceOllamaReqBody(messages []*dataTypes.NativeTooltypeMessage, modelName string, systemPrompt string) dataTypes.NativeToolChatRequest {
+	var allMessages []*dataTypes.NativeTooltypeMessage
+	if systemPrompt != "" {
+		allMessages = append(allMessages, &dataTypes.NativeTooltypeMessage{Role: "system", Content: systemPrompt})
+	}
+	allMessages = append(allMessages, messages...)
 	return dataTypes.NativeToolChatRequest{
 		Model:    modelName,
-		Messages: messages,
+		Messages: allMessages,
 		Stream:   false,
 		Tools:    nativeTools(),
 	}
 }
 
-func produceOpenAIReqBody(messages []*dataTypes.OpenAIChatMessage, modelName string) dataTypes.OpenAIChatRequest {
+func produceOpenAIReqBody(messages []*dataTypes.OpenAIChatMessage, modelName string, systemPrompt string) dataTypes.OpenAIChatRequest {
+	var allMessages []*dataTypes.OpenAIChatMessage
+	if systemPrompt != "" {
+		allMessages = append(allMessages, &dataTypes.OpenAIChatMessage{Role: "system", Content: systemPrompt})
+	}
+	allMessages = append(allMessages, messages...)
 	return dataTypes.OpenAIChatRequest{
-		Model:    modelName,
-		Messages: messages,
-		Stream:   false,
-		Tools:    nativeTools(),
-
-		// vLLM defaults tool_choice to "none", so send "auto" explicitly.
+		Model:      modelName,
+		Messages:   allMessages,
+		Stream:     false,
+		Tools:      nativeTools(),
 		ToolChoice: "auto",
 	}
 }

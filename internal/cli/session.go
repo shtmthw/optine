@@ -26,12 +26,14 @@ func sessionForRun(cfg harnessSession.Config, sessionUID string) (*harnessSessio
 		return nil, err
 	}
 
-	// Snapshots and tools must share one working directory. Older sessions may
-	// not have stored one, so adopt the current directory for those.
-	switch {
-	case next.Directory == "":
-		next.Directory = cfg.Directory
-	case next.Directory != cfg.Directory:
+	// Align the loaded session to the active config so the looper kind guard
+	// never fires from a decoupled saved kind/provider pair. The session runs
+	// under cfg.Provider; Commit persists the aligned provider.
+	next.Provider = cfg.Provider
+	next.ReconcileKind()
+
+	// Snapshots and tools must share one working directory.
+	if next.Directory != cfg.Directory {
 		return nil, fmt.Errorf(
 			"session %s was started in %q; resume it from that directory",
 			next.UID, next.Directory,

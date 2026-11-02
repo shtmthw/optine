@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/mattthew/optine/internal/harnessPermissions"
@@ -15,13 +16,13 @@ func checkProviderAvailability(providerName, modelName string) error {
 
 	case "Ollama":
 		if err := withSpinner(fmt.Sprintf("Loading %s into Ollama", modelName), func() error {
-			return provider.OllamaLoadModel(modelName)
+			return provider.OllamaLoadModel(context.Background(), modelName)
 		}); err != nil {
 			return fmt.Errorf("error occured while trying to communicate with the local Ollama server, err: %v", err)
 		}
 
 	case "vLLM":
-		_, err := provider.VLLMGetModelData()
+		_, err := provider.VLLMGetModelData(context.Background())
 		if err != nil {
 			return fmt.Errorf("error occured while trying to communicate with the local vLLM server, err: %v", err)
 		}

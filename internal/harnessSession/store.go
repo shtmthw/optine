@@ -33,63 +33,54 @@ func defaultSessionsDir() (string, error) {
 }
 
 // sessionFile is the on-disk shape. Exactly one message array is populated,
-// matching Kind.
+// matching Kind. System prompt is stored at top level, not in message arrays.
 type sessionFile struct {
-	UID               string                             `json:"uid"`
-	Kind              Kind                               `json:"kind"`
-	Provider          string                             `json:"provider"`
-	Model             string                             `json:"model"`
-	Directory         string                             `json:"directory,omitempty"`
-	CreatedAt         time.Time                          `json:"created_at"`
-	UpdatedAt         time.Time                          `json:"updated_at"`
-	ContextLimit      int                                `json:"context_limit,omitempty"`
-	MaxTurns          int                                `json:"max_turns,omitempty"`
-	GitStatus         bool                               `json:"git_status,omitempty"`
-	RunCount          int                                `json:"run_count"`
-	TotalUserMessages int                                `json:"total_user_messages"`
-	LastPromptTokens  int                                `json:"last_prompt_tokens,omitempty"`
-	Ollama            []*dataTypes.NativeTooltypeMessage `json:"ollama_messages,omitempty"`
-	OpenAICompat      []*dataTypes.OpenAIChatMessage     `json:"vllm_messages,omitempty"`
-	Envelope          []*dataTypes.NonNativeMessage      `json:"envelope_messages,omitempty"`
+	UID                   string                             `json:"uid"`
+	Kind                  Kind                               `json:"kind"`
+	Provider              string                             `json:"provider"`
+	Model                 string                             `json:"model"`
+	Directory             string                             `json:"directory,omitempty"`
+	CreatedAt             time.Time                          `json:"created_at"`
+	UpdatedAt             time.Time                          `json:"updated_at"`
+	ContextLimit          int                                `json:"context_limit,omitempty"`
+	MaxTurns              int                                `json:"max_turns,omitempty"`
+	GitStatus             bool                               `json:"git_status,omitempty"`
+	LocalOnly             bool                               `json:"local_only,omitempty"`
+	ToolCall              bool                               `json:"tool_call,omitempty"`
+	RunCount              int                                `json:"run_count"`
+	TotalUserMessages     int                                `json:"total_user_messages"`
+	LastPromptTokens      int                                `json:"last_prompt_tokens,omitempty"`
+	SystemPrompt          string                             `json:"system_prompt,omitempty"`
+	OllamaNative          []*dataTypes.NativeTooltypeMessage `json:"ollama-native,omitempty"`
+	OpenAIChatCompletions []*dataTypes.OpenAIChatMessage     `json:"openai-chat-completions,omitempty"`
+	Envelope              []*dataTypes.NonNativeMessage      `json:"envelope,omitempty"`
 }
 
 func (f sessionFile) messageLen() int {
-	switch f.Kind {
-	case OllamaNative:
-		return len(f.Ollama)
-	case OpenAICompatNative:
-		return len(f.OpenAICompat)
-	case Envelope:
-		return len(f.Envelope)
-	}
-
-	return 0
+	return len(f.OllamaNative) + len(f.OpenAIChatCompletions) + len(f.Envelope)
 }
 
 func toFile(s *Session) sessionFile {
 	f := sessionFile{
-		UID:               s.UID,
-		Kind:              s.Kind,
-		Provider:          s.Provider,
-		Model:             s.Model,
-		Directory:         s.Directory,
-		CreatedAt:         s.CreatedAt,
-		UpdatedAt:         s.UpdatedAt,
-		ContextLimit:      s.ContextLimit,
-		MaxTurns:          s.MaxTurns,
-		GitStatus:         s.GitStatus,
-		RunCount:          s.RunCount,
-		TotalUserMessages: s.TotalUserMessages,
-		LastPromptTokens:  s.LastPromptTokens,
-	}
-
-	switch s.Kind {
-	case OllamaNative:
-		f.Ollama = s.ollama
-	case OpenAICompatNative:
-		f.OpenAICompat = s.openAI
-	case Envelope:
-		f.Envelope = s.envelope
+		UID:                   s.UID,
+		Kind:                  s.Kind,
+		Provider:              s.Provider,
+		Model:                 s.Model,
+		Directory:             s.Directory,
+		CreatedAt:             s.CreatedAt,
+		UpdatedAt:             s.UpdatedAt,
+		ContextLimit:          s.ContextLimit,
+		MaxTurns:              s.MaxTurns,
+		GitStatus:             s.GitStatus,
+		LocalOnly:             s.LocalOnly,
+		ToolCall:              s.ToolCall,
+		RunCount:              s.RunCount,
+		TotalUserMessages:     s.TotalUserMessages,
+		LastPromptTokens:      s.LastPromptTokens,
+		SystemPrompt:          s.SystemPrompt,
+		OllamaNative:          s.ollamaNative,
+		OpenAIChatCompletions: s.openAIChatCompletions,
+		Envelope:              s.envelope,
 	}
 
 	return f
@@ -155,6 +146,8 @@ type Meta struct {
 	TotalUserMessages int
 	ContextLimit      int
 	GitStatus         bool
+	LocalOnly         bool
+	ToolCall          bool
 }
 
 func loopInternals(
@@ -194,6 +187,8 @@ func loopInternals(
 			TotalUserMessages: f.TotalUserMessages,
 			ContextLimit:      f.ContextLimit,
 			GitStatus:         f.GitStatus,
+			LocalOnly:         f.LocalOnly,
+			ToolCall:          f.ToolCall,
 		})
 	}
 }
@@ -252,40 +247,55 @@ func Load(uid string) (*Session, error) {
 		ContextLimit:      f.ContextLimit,
 		MaxTurns:          f.MaxTurns,
 		GitStatus:         f.GitStatus,
+		LocalOnly:         f.LocalOnly,
+		ToolCall:          f.ToolCall,
 		RunCount:          f.RunCount,
 		TotalUserMessages: f.TotalUserMessages,
 		LastPromptTokens:  f.LastPromptTokens,
+		SystemPrompt:      f.SystemPrompt,
+	}
+
+	// Restore every slot, not just the one matching Kind: ReconcileKind may
+	// switch Kind on load, and history must not be lost when it does.
+	s.ollamaNative = f.OllamaNative
+	s.openAIChatCompletions = f.OpenAIChatCompletions
+	s.envelope = f.Envelope
+
+	if err := validateOllamaPairs(s.ollamaNative); err != nil {
+		return nil, fmt.Errorf("session %s is corrupt: %w", uid, err)
+	}
+	if err := validateOpenAIPairs(s.openAIChatCompletions); err != nil {
+		return nil, fmt.Errorf("session %s is corrupt: %w", uid, err)
 	}
 
 	if s.ContextLimit <= 0 {
 		s.ContextLimit = DefaultContextLimit
 	}
 
-	switch f.Kind {
-	case OllamaNative:
-		s.ollama = f.Ollama
-		if err := validateOllamaPairs(s.ollama); err != nil {
-			return nil, fmt.Errorf("session %s is corrupt: %w", uid, err)
-		}
-	case OpenAICompatNative:
-		s.openAI = f.OpenAICompat
-		if err := validateOpenAIPairs(s.openAI); err != nil {
-			return nil, fmt.Errorf("session %s is corrupt: %w", uid, err)
-		}
-	case Envelope:
-		s.envelope = f.Envelope
-	default:
-		return nil, fmt.Errorf("session %s has unknown kind %q", uid, f.Kind)
-	}
+	s.restoreSystemCache()
 
-	if s.Len() == 0 {
-		return nil, fmt.Errorf("session %s is empty", uid)
-	}
-
-	s.SystemCache = newSystemCache(s.Kind, s.MaxTurns)
-	s.setSystemContent(s.SystemCache.injected)
+	s.ReconcileKind()
 
 	return s, nil
+}
+
+// restoreSystemCache seeds the prompt cache from a loaded session.
+func (s *Session) restoreSystemCache() {
+	if s.SystemPrompt == "" {
+		s.SystemCache = newSystemCache(s.MaxTurns, s.ToolCall)
+		s.SystemPrompt = s.SystemCache.compose()
+		return
+	}
+
+	// The prompt date tracks the session, so reuse its creation time.
+	promptTime := s.CreatedAt
+
+	// The base is rebuilt for the session's tool mode.
+	s.SystemCache = systemCache{
+		promptTime: promptTime,
+		maxTurns:   s.MaxTurns,
+	}
+	s.SystemCache.refreshBase(s.ToolCall, availableCrawlers())
 }
 
 // validateOllamaPairs rejects an assistant tool-call message with too few

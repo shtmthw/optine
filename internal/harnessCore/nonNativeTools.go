@@ -10,14 +10,21 @@ import (
 	"strings"
 
 	"github.com/mattthew/optine/internal/dataTypes"
+	"github.com/mattthew/optine/internal/harnessPermissions"
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
-func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string) dataTypes.NonNativeChatRequest {
+func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string) dataTypes.NonNativeChatRequest {
+
+	var allMessages []*dataTypes.NonNativeMessage
+	if systemPrompt != "" {
+		allMessages = append(allMessages, &dataTypes.NonNativeMessage{Role: "system", Content: systemPrompt})
+	}
+	allMessages = append(allMessages, messages...)
 
 	var requestBody = dataTypes.NonNativeChatRequest{
 		Model:    modelName,
-		Messages: messages,
+		Messages: allMessages,
 		Stream:   false,
 
 		// Valid JSON output, not native tool calling.
@@ -27,40 +34,46 @@ func produceNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName s
 	return requestBody
 }
 
-func produceVLLMNonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string) dataTypes.VLLMNonNativeChatRequest {
+func produceOpenAINonNativeReqBody(messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string) dataTypes.OpenAINonNativeChatRequest {
 
 	var responseFormat = dataTypes.NonNativeResponseFormat{
 		Type: "json_object",
 	}
 
-	var requestBody = dataTypes.VLLMNonNativeChatRequest{
+	var allMessages []*dataTypes.NonNativeMessage
+	if systemPrompt != "" {
+		allMessages = append(allMessages, &dataTypes.NonNativeMessage{Role: "system", Content: systemPrompt})
+	}
+	allMessages = append(allMessages, messages...)
+
+	var requestBody = dataTypes.OpenAINonNativeChatRequest{
 		Model:    modelName,
-		Messages: messages,
+		Messages: allMessages,
 		Stream:   false,
 
-		// vLLM spells Ollama's Format:"json" as response_format.
+		// vLLM and OpenRouter spell Ollama's Format:"json" as response_format.
 		ResponseFormat: &responseFormat,
 	}
 
 	return requestBody
 }
 
-func ollamaNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, int, error) {
+func ollamaNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string, _, _ string) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.NonNativeChatResponse
 
-	if err := postJSON(ctx, ollamaChatURL, produceNonNativeReqBody(messages, modelName), &result); err != nil {
+	if err := postJSON(ctx, ollamaChatURL, produceNonNativeReqBody(messages, modelName, systemPrompt), &result); err != nil {
 		return nil, 0, err
 	}
 
 	return &result.Message, result.PromptEvalCount, nil
 }
 
-func vllmNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, int, error) {
+func openAiNonNativeChat(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string, systemPrompt string, chatURL string, apiKey string) (*dataTypes.NonNativeMessage, int, error) {
 
-	var result dataTypes.VLLMNonNativeChatResponse
+	var result dataTypes.OpenAINonNativeChatResponse
 
-	if err := postJSON(ctx, vLLMChatURL, produceVLLMNonNativeReqBody(messages, modelName), &result); err != nil {
+	if err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAINonNativeReqBody(messages, modelName, systemPrompt), &result); err != nil {
 		return nil, 0, err
 	}
 
@@ -80,12 +93,27 @@ func parseNonNativeResponse(content string) (*dataTypes.NonNativeLLMResponse, er
 	content = strings.TrimSuffix(content, "```")
 	content = strings.TrimSpace(content)
 
-	var response dataTypes.NonNativeLLMResponse
+	var raw struct {
+		Type      string          `json:"type"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+		Content   string          `json:"content"`
+	}
 
-	decoder := json.NewDecoder(strings.NewReader(content))
-
-	if err := decoder.Decode(&response); err != nil {
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
 		return nil, err
+	}
+
+	arguments, err := decodeNonNativeArguments(raw.Arguments)
+	if err != nil {
+		return nil, err
+	}
+
+	response := dataTypes.NonNativeLLMResponse{
+		Type:      raw.Type,
+		Tool:      raw.Tool,
+		Arguments: arguments,
+		Content:   raw.Content,
 	}
 
 	switch response.Type {
@@ -109,6 +137,25 @@ func parseNonNativeResponse(content string) (*dataTypes.NonNativeLLMResponse, er
 	return &response, nil
 }
 
+// decodeNonNativeArguments accepts an object or an OpenAI-style JSON string.
+func decodeNonNativeArguments(raw json.RawMessage) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var arguments map[string]any
+	if err := json.Unmarshal(raw, &arguments); err == nil {
+		return arguments, nil
+	}
+
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return nil, fmt.Errorf("decoding arguments %s: %w", raw, err)
+	}
+
+	return decodeOpenAIArguments(encoded)
+}
+
 // maxEnvelopeExcerpt caps the raw reply quoted in a correction.
 const maxEnvelopeExcerpt = 500
 
@@ -122,9 +169,13 @@ func correctionForBadEnvelope(raw string) string {
 		strings.TrimSpace(raw),
 	)
 }
+
+type nonNativeChat func(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName, systemPrompt, chatURL, apiKey string) (*dataTypes.NonNativeMessage, int, error)
+
 func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
 
-	var chat func(ctx context.Context, messages []*dataTypes.NonNativeMessage, modelName string) (*dataTypes.NonNativeMessage, int, error)
+	var chat nonNativeChat
+	var chatURL, apiKey string
 
 	switch provider {
 
@@ -132,7 +183,14 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 		chat = ollamaNonNativeChat
 
 	case "vLLM":
-		chat = vllmNonNativeChat
+		chat, chatURL = openAiNonNativeChat, vLLMChatURL
+
+	case "Openrouter":
+		key, err := harnessPermissions.GetAPIKey("openrouter")
+		if err != nil {
+			return "", err
+		}
+		chat, chatURL, apiKey = openAiNonNativeChat, openRouterChatURL, key
 
 	default:
 		return "", fmt.Errorf("unsupported provider %q", provider)
@@ -143,8 +201,21 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
-		reply, promptTokens, err := chat(ctx, *history, modelName)
+		reply, promptTokens, err := chat(ctx, *history, modelName, sess.SystemPrompt, chatURL, apiKey)
 		if err != nil {
+			if errors.Is(err, ErrMalformedJSON) {
+				correction, abort := handleMalformedBody(&badBodies, fmt.Errorf("malformed HTTP body from %s: %w", provider, err))
+				if abort != nil {
+					return "", abort
+				}
+				turns = extendTurns(turns)
+				log.Printf("non-native turn %d: malformed body (%d/%d), asking model to re-issue", turn+1, badBodies, maxBadBodies)
+				*history = append(*history, &dataTypes.NonNativeMessage{
+					Role:    "user",
+					Content: correction,
+				})
+				continue
+			}
 			return "", err
 		}
 		sess.RecordPromptTokens(promptTokens)

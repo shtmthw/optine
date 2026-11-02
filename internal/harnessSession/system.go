@@ -10,19 +10,19 @@ import (
 	"github.com/mattthew/optine/internal/systemPrompts"
 )
 
-// systemCache keeps the system message next to the snapshot it was built from.
-// The prompt is rebuilt only when memory or crawler availability changes.
+// systemCache keeps the system prompt's inputs next to the snapshot they were
+// built from. The composed prompt itself lives only in Session.SystemPrompt;
+// the cache is rebuilt only when memory, crawler availability, or the tool
+// protocol changes.
 type systemCache struct {
-	kind       Kind
 	promptTime time.Time
 	maxTurns   int
+	toolCall   bool
 
 	base         string
 	memoryPath   string
 	memoryData   string
 	crawlerStamp string
-
-	injected string
 }
 
 // Indirection so tests can drive the cache without touching the real notebook.
@@ -32,22 +32,20 @@ var (
 	availableCrawlers    = harnessTools.CrawlersAvailable
 )
 
-func newSystemCache(kind Kind, maxTurns int) systemCache {
+func newSystemCache(maxTurns int, toolCall bool) systemCache {
 	c := systemCache{
-		kind:       kind,
 		promptTime: time.Now(),
 		maxTurns:   maxTurns,
 	}
 
-	c.refreshBase()
+	c.refreshBase(toolCall, availableCrawlers())
 	c.refreshMemory()
-	c.injected = c.compose()
 
 	return c
 }
 
-func buildBasePrompt(kind Kind, now time.Time, maxTurns int, crawlers []string) string {
-	if kind == Envelope {
+func buildBasePrompt(now time.Time, maxTurns int, crawlers []string, toolCall bool) string {
+	if !toolCall {
 		return systemPrompts.NonNativeToolSystemPrompt(now, maxTurns, crawlers)
 	}
 
@@ -58,10 +56,9 @@ func crawlerStamp(crawlers []string) string {
 	return strings.Join(crawlers, ",")
 }
 
-func (c *systemCache) refreshBase() {
-	crawlers := availableCrawlers()
-
-	c.base = buildBasePrompt(c.kind, c.promptTime, c.maxTurns, crawlers)
+func (c *systemCache) refreshBase(toolCall bool, crawlers []string) {
+	c.toolCall = toolCall
+	c.base = buildBasePrompt(c.promptTime, c.maxTurns, crawlers, toolCall)
 	c.crawlerStamp = crawlerStamp(crawlers)
 }
 
@@ -98,14 +95,15 @@ func (c *systemCache) compose() string {
 }
 
 // SyncSystem re-reads memory and crawler availability, rebuilding the system
-// message only when the contents changed.
+// prompt only when the contents or the tool protocol changed.
 func (s *Session) SyncSystem() bool {
 	c := &s.SystemCache
 
 	changed := c.refreshMemory()
 
-	if crawlerStamp(availableCrawlers()) != c.crawlerStamp {
-		c.refreshBase()
+	crawlers := availableCrawlers()
+	if crawlerStamp(crawlers) != c.crawlerStamp || s.ToolCall != c.toolCall {
+		c.refreshBase(s.ToolCall, crawlers)
 		changed = true
 	}
 
@@ -115,12 +113,11 @@ func (s *Session) SyncSystem() bool {
 
 	next := c.compose()
 
-	if next == c.injected {
+	if next == s.SystemPrompt {
 		return false
 	}
 
-	c.injected = next
-	s.setSystemContent(next)
+	s.SystemPrompt = next
 
 	return true
 }

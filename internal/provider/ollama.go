@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ var ollamaModelLoader = &http.Client{
 }
 
 // OllamaLoadModel loads the selected model into memory and blocks until ready.
-func OllamaLoadModel(selectedModel string) error {
+func OllamaLoadModel(ctx context.Context, selectedModel string) error {
 	payload := map[string]any{
 		"model":      selectedModel,
 		"messages":   []any{},
@@ -56,11 +57,18 @@ func OllamaLoadModel(selectedModel string) error {
 		return fmt.Errorf("encode ollama load request: %w", err)
 	}
 
-	resp, err := ollamaModelLoader.Post(
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
 		"http://localhost:11434/api/chat",
-		"application/json",
 		bytes.NewReader(body),
 	)
+	if err != nil {
+		return fmt.Errorf("build ollama load request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ollamaModelLoader.Do(req)
 	if err != nil {
 		return fmt.Errorf("ollama load request: %w", err)
 	}
@@ -114,8 +122,13 @@ func ollamaResponseSnippet(raw []byte) string {
 }
 
 // ollamaGetRunningModels lists the models Ollama has loaded.
-func ollamaGetRunningModels() ([]RunningModel, error) {
-	resp, err := ollamaClient.Get("http://localhost:11434/api/ps")
+func ollamaGetRunningModels(ctx context.Context) ([]RunningModel, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:11434/api/ps", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := ollamaClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -135,8 +148,8 @@ func ollamaGetRunningModels() ([]RunningModel, error) {
 
 // ContextLength reads the running model's context window from /api/ps. Zero
 // means Ollama did not report it, so the caller falls back to the default.
-func (OllamaShowResponse) ContextLength(selectedModel string) int {
-	runningModels, err := ollamaGetRunningModels()
+func (OllamaShowResponse) ContextLength(ctx context.Context, selectedModel string) int {
+	runningModels, err := ollamaGetRunningModels(ctx)
 	if err != nil {
 		return 0
 	}
@@ -150,12 +163,38 @@ func (OllamaShowResponse) ContextLength(selectedModel string) int {
 	return 0
 }
 
+// OllamaContextLength loads the model into memory, then returns its actual context length reported by /api/ps.
+func OllamaContextLength(ctx context.Context, modelName string) (int, error) {
+	if err := OllamaLoadModel(ctx, modelName); err != nil {
+		return 0, err
+	}
+
+	runningModels, err := ollamaGetRunningModels(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, modelData := range runningModels {
+		if modelData.Name == modelName {
+			return modelData.ContextLength, nil
+		}
+	}
+
+	return 0, nil
+}
+
 var ollamaClient = &http.Client{
 	Timeout: 30 * time.Second,
 }
 
-func OllamaGetModelData() ([]string, error) {
-	resp, err := ollamaClient.Get("http://localhost:11434/api/tags")
+func OllamaGetModelData(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:11434/api/tags", nil)
+	if err != nil {
+
+		return nil, err
+	}
+
+	resp, err := ollamaClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +229,7 @@ func OllamaGetModelData() ([]string, error) {
 	return modelNames, nil
 }
 
-func OllamaGetModelMetaData(modelName string) (OllamaShowResponse, error) {
+func OllamaGetModelMetaData(ctx context.Context, modelName string) (OllamaShowResponse, error) {
 	requestBody := OllamaShowRequest{
 		Model: modelName,
 	}
@@ -200,11 +239,18 @@ func OllamaGetModelMetaData(modelName string) (OllamaShowResponse, error) {
 		return OllamaShowResponse{}, err
 	}
 
-	resp, err := ollamaClient.Post(
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
 		"http://localhost:11434/api/show",
-		"application/json",
 		bytes.NewReader(body),
 	)
+	if err != nil {
+		return OllamaShowResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ollamaClient.Do(req)
 	if err != nil {
 		return OllamaShowResponse{}, err
 	}

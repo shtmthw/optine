@@ -9,7 +9,7 @@ import (
 func TestOllamaTranscriptKeepsOnlyConversation(t *testing.T) {
 	sess := &Session{
 		Kind: OllamaNative,
-		ollama: []*dataTypes.NativeTooltypeMessage{
+		ollamaNative: []*dataTypes.NativeTooltypeMessage{
 			{Role: "system", Content: "system prompt"},
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: "checking files", ToolCalls: []dataTypes.NativeTypeToolCall{{ID: "call_1"}}},
@@ -38,7 +38,7 @@ func TestOllamaTranscriptKeepsOnlyConversation(t *testing.T) {
 func TestVLLMTranscriptKeepsOnlyConversation(t *testing.T) {
 	sess := &Session{
 		Kind: OpenAICompatNative,
-		openAI: []*dataTypes.OpenAIChatMessage{
+		openAIChatCompletions: []*dataTypes.OpenAIChatMessage{
 			{Role: "system", Content: "system prompt"},
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: "checking files", ToolCalls: []dataTypes.OpenAITypeToolCall{{ID: "call_1"}}},
@@ -72,6 +72,7 @@ func TestEnvelopeTranscriptUnwrapsFinalAnswers(t *testing.T) {
 			{Role: "user", Content: "TOOL_RESULT\ntool: bash\n\nresult:\nfile.go"},
 			{Role: "assistant", Content: "```json\n{\"type\":\"final_answer\",\"content\":\"done\"}\n```"},
 			{Role: "user", Content: envelopeRetryPrefix + " Reply with exactly one valid JSON object."},
+			{Role: "user", Content: nativeRetryPrefix + " — re-issue your previous turn, exactly as before."},
 		},
 	}
 

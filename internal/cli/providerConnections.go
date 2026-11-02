@@ -169,7 +169,7 @@ func checkApiAuthentication(providerName, apiKey string) error {
 
 		hasTools := slices.Contains(modelData.SupportedParameters, "tools")
 
-		return RunAgentSession("Openrouter", modelData.ID, hasTools, modelData.ContextLength, "", false)
+		return RunAgentSession("Openrouter", modelData.ID, hasTools, modelData.ContextLength, "", false, false)
 
 	case "openai":
 		return fmt.Errorf("under development")

@@ -3,7 +3,7 @@ package harnessSession
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mattthew/optine/internal/dataTypes"
@@ -14,9 +14,14 @@ import (
 type Kind string
 
 const (
-	OllamaNative       Kind = "ollama-native"
-	OpenAICompatNative Kind = "openAI-native"
-	Envelope           Kind = "envelope"
+	OllamaNative          Kind = "ollama-native"
+	OpenAIChatCompletions Kind = "openai-chat-completions"
+	OpenAICompatNative    Kind = OpenAIChatCompletions // alias: vLLM/OpenRouter use openai-chat-completions
+	OpenAIResponses       Kind = "openai-responses"
+	AnthropicMessages     Kind = "anthropic-messages"
+	GeminiGenerateContent Kind = "gemini-generate-content"
+
+	Envelope Kind = "envelope"
 )
 
 // DefaultContextLimit is used when the provider reports no context window.
@@ -33,6 +38,13 @@ type Config struct {
 	// GitStatus selects the snapshot backend for a new session. Load restores
 	// the saved value instead of consulting this field.
 	GitStatus bool
+	// LocalOnly marks /local sessions, which must never switch to remote
+	// (OpenRouter) models via /model. Set once at New, preserved on Load,
+	// never rewritten afterward.
+	LocalOnly bool
+	// ToolCall selects native tool calling for a new session. Load restores the
+	// saved value instead of consulting this field.
+	ToolCall bool
 }
 
 // Session owns one conversation's history and system-prompt cache. Only the
@@ -51,15 +63,19 @@ type Session struct {
 	// GitStatus is fixed when the session is created or loaded from disk and
 	// selects the snapshot backend for the session's entire lifetime.
 	GitStatus         bool
+	LocalOnly         bool
+	ToolCall          bool
 	RunCount          int
 	TotalUserMessages int
 	LastPromptTokens  int
 
+	SystemPrompt string
+
 	SystemCache systemCache
 
-	ollama   []*dataTypes.NativeTooltypeMessage
-	openAI   []*dataTypes.OpenAIChatMessage
-	envelope []*dataTypes.NonNativeMessage
+	ollamaNative          []*dataTypes.NativeTooltypeMessage
+	openAIChatCompletions []*dataTypes.OpenAIChatMessage
+	envelope              []*dataTypes.NonNativeMessage
 }
 
 // OnActiveSession is the UI bridge for the active session UID.
@@ -71,14 +87,14 @@ func KindFor(provider string, nativeToolCalling bool) Kind {
 		return Envelope
 	}
 
-	if provider == "vLLM" || provider == "Openrouter" {
+	if strings.EqualFold(provider, "vLLM") || strings.EqualFold(provider, "Openrouter") {
 		return OpenAICompatNative
 	}
 
 	return OllamaNative
 }
 
-// New builds an in-memory session with its system message seeded. The file is
+// New builds an in-memory session with its system prompt seeded. The file is
 // written on first Commit, so quitting before the first message leaves nothing.
 func New(cfg Config) *Session {
 	limit := cfg.ContextLimit
@@ -86,21 +102,24 @@ func New(cfg Config) *Session {
 		limit = DefaultContextLimit
 	}
 
+	now := time.Now()
 	s := &Session{
 		UID:          NewUID(),
 		Kind:         cfg.Kind,
 		Provider:     cfg.Provider,
 		Model:        cfg.Model,
 		Directory:    cfg.Directory,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 		ContextLimit: limit,
 		MaxTurns:     cfg.MaxTurns,
 		GitStatus:    cfg.GitStatus,
+		LocalOnly:    cfg.LocalOnly,
+		ToolCall:     cfg.ToolCall,
 	}
 
-	s.SystemCache = newSystemCache(cfg.Kind, cfg.MaxTurns)
-	s.setSystemContent(s.SystemCache.injected)
+	s.SystemCache = newSystemCache(cfg.MaxTurns, cfg.ToolCall)
+	s.SystemPrompt = s.SystemCache.compose()
 
 	return s
 }
@@ -121,9 +140,9 @@ func (s *Session) AppendUser(content string) {
 
 	switch s.Kind {
 	case OllamaNative:
-		s.ollama = append(s.ollama, &dataTypes.NativeTooltypeMessage{Role: "user", Content: content})
+		s.ollamaNative = append(s.ollamaNative, &dataTypes.NativeTooltypeMessage{Role: "user", Content: content})
 	case OpenAICompatNative:
-		s.openAI = append(s.openAI, &dataTypes.OpenAIChatMessage{Role: "user", Content: content})
+		s.openAIChatCompletions = append(s.openAIChatCompletions, &dataTypes.OpenAIChatMessage{Role: "user", Content: content})
 	case Envelope:
 		s.envelope = append(s.envelope, &dataTypes.NonNativeMessage{Role: "user", Content: content})
 	}
@@ -133,9 +152,11 @@ func (s *Session) AppendUser(content string) {
 // append may reallocate the backing array, so every write has to go back into
 // the session (the loops append through *slot for this reason).
 
-func (s *Session) Ollama() *[]*dataTypes.NativeTooltypeMessage { return &s.ollama }
+func (s *Session) OllamaNative() *[]*dataTypes.NativeTooltypeMessage { return &s.ollamaNative }
 
-func (s *Session) OpenAI() *[]*dataTypes.OpenAIChatMessage { return &s.openAI }
+func (s *Session) OpenAIChatCompletions() *[]*dataTypes.OpenAIChatMessage {
+	return &s.openAIChatCompletions
+}
 
 func (s *Session) Envelope() *[]*dataTypes.NonNativeMessage { return &s.envelope }
 
@@ -151,9 +172,9 @@ func (s *Session) RecordPromptTokens(n int) {
 func (s *Session) Len() int {
 	switch s.Kind {
 	case OllamaNative:
-		return len(s.ollama)
+		return len(s.ollamaNative)
 	case OpenAICompatNative:
-		return len(s.openAI)
+		return len(s.openAIChatCompletions)
 	case Envelope:
 		return len(s.envelope)
 	}
@@ -162,33 +183,25 @@ func (s *Session) Len() int {
 }
 
 // Resumeable reports whether this session can continue on the given loop.
-func (s *Session) Resumeable(kind Kind) error {
-	if s.Kind != kind {
-		return fmt.Errorf("session %s is of the %s protocol and cannot resume as %s", s.UID, s.Kind, kind)
-	}
 
+func (s *Session) Resumeable(kind Kind) error {
 	return nil
 }
 
-// setSystemContent replaces or inserts the system message in the active slot.
-func (s *Session) setSystemContent(content string) {
-	switch s.Kind {
-	case OllamaNative:
-		if len(s.ollama) == 0 || s.ollama[0].Role != "system" {
-			s.ollama = append([]*dataTypes.NativeTooltypeMessage{{Role: "system"}}, s.ollama...)
-		}
-		s.ollama[0].Content = content
-	case OpenAICompatNative:
-		if len(s.openAI) == 0 || s.openAI[0].Role != "system" {
-			s.openAI = append([]*dataTypes.OpenAIChatMessage{{Role: "system"}}, s.openAI...)
-		}
-		s.openAI[0].Content = content
-	case Envelope:
-		if len(s.envelope) == 0 || s.envelope[0].Role != "system" {
-			s.envelope = append([]*dataTypes.NonNativeMessage{{Role: "system"}}, s.envelope...)
-		}
-		s.envelope[0].Content = content
+// ReconcileKind restores the invariant sess.Kind == KindFor(sess.Provider, nativeToolCalling) when a saved session holds a decoupled kind/provider pair
+// for example kind=ollama-native with provider=Openrouter.
+func (s *Session) ReconcileKind() {
+	nativeToolCalling := s.Kind != Envelope
+	s.ToolCall = nativeToolCalling
+	expected := KindFor(s.Provider, nativeToolCalling)
+
+	if s.Kind == expected {
+		return
 	}
+
+	s.Kind = expected
+	s.SystemCache = newSystemCache(s.MaxTurns, s.ToolCall)
+	s.SystemPrompt = s.SystemCache.compose()
 }
 
 // NewUID is timestamp-prefixed so a plain directory listing sorts by age, and

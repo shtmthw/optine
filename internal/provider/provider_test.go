@@ -1,13 +1,16 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // redirectClient returns an *http.Client that sends every request to base,
@@ -49,7 +52,7 @@ func TestOllamaGetModelData(t *testing.T) {
 		fmt.Fprint(w, `{"models":[{"name":"llama3:8b"},{"name":"qwen2.5:7b"}]}`)
 	})
 
-	models, err := OllamaGetModelData()
+	models, err := OllamaGetModelData(context.Background())
 	if err != nil {
 		t.Fatalf("OllamaGetModelData: %v", err)
 	}
@@ -63,7 +66,7 @@ func TestOllamaGetModelDataNoModels(t *testing.T) {
 		fmt.Fprint(w, `{"models":[]}`)
 	})
 
-	if _, err := OllamaGetModelData(); err == nil {
+	if _, err := OllamaGetModelData(context.Background()); err == nil {
 		t.Fatal("empty model list should error")
 	}
 }
@@ -73,7 +76,7 @@ func TestOllamaGetModelDataNeedsKey(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	})
 
-	if _, err := OllamaGetModelData(); !errors.Is(err, ErrNeedsKey) {
+	if _, err := OllamaGetModelData(context.Background()); !errors.Is(err, ErrNeedsKey) {
 		t.Fatalf("want ErrNeedsKey, got %v", err)
 	}
 }
@@ -83,7 +86,7 @@ func TestOllamaGetModelDataUnexpectedStatus(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	})
 
-	if _, err := OllamaGetModelData(); err == nil {
+	if _, err := OllamaGetModelData(context.Background()); err == nil {
 		t.Fatal("non-OK status should error")
 	}
 }
@@ -96,7 +99,7 @@ func TestOllamaGetModelMetaData(t *testing.T) {
 		fmt.Fprint(w, `{"capabilities":["tools","completion"],"model_info":{"llama.context_length":8192}}`)
 	})
 
-	meta, err := OllamaGetModelMetaData("llama3:8b")
+	meta, err := OllamaGetModelMetaData(context.Background(), "llama3:8b")
 	if err != nil {
 		t.Fatalf("OllamaGetModelMetaData: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestOllamaGetModelMetaDataNonOK(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	if _, err := OllamaGetModelMetaData("missing"); err == nil {
+	if _, err := OllamaGetModelMetaData(context.Background(), "missing"); err == nil {
 		t.Fatal("non-OK status should error")
 	}
 }
@@ -146,11 +149,45 @@ func TestOllamaContextLength(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			})
 
-			got := (OllamaShowResponse{}).ContextLength(tc.model)
+			got := (OllamaShowResponse{}).ContextLength(context.Background(), tc.model)
 			if got != tc.want {
 				t.Fatalf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestOllamaContextLengthLoadsThenFetches(t *testing.T) {
+	stubProvider(t, &ollamaModelLoader, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"done_reason":"load"}`)
+	})
+	stubProvider(t, &ollamaClient, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/ps" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"models":[{"name":"llama3:8b","context_length":8192}]}`)
+	})
+
+	got, err := OllamaContextLength(context.Background(), "llama3:8b")
+	if err != nil {
+		t.Fatalf("OllamaContextLength: %v", err)
+	}
+	if got != 8192 {
+		t.Fatalf("got %d, want 8192", got)
+	}
+}
+
+func TestOllamaContextLengthLoadFails(t *testing.T) {
+	stubProvider(t, &ollamaModelLoader, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":"model not found"}`)
+	})
+
+	if _, err := OllamaContextLength(context.Background(), "llama3:8b"); err == nil {
+		t.Fatal("want error when load fails")
 	}
 }
 
@@ -190,7 +227,7 @@ func TestOllamaLoadModel(t *testing.T) {
 		fmt.Fprint(w, `{"done_reason":"load"}`)
 	})
 
-	if err := OllamaLoadModel("llama3:8b"); err != nil {
+	if err := OllamaLoadModel(context.Background(), "llama3:8b"); err != nil {
 		t.Fatalf("OllamaLoadModel: %v", err)
 	}
 }
@@ -215,7 +252,7 @@ func TestOllamaLoadModelErrors(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			})
 
-			err := OllamaLoadModel("llama3:8b")
+			err := OllamaLoadModel(context.Background(), "llama3:8b")
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -231,7 +268,7 @@ func TestVLLMGetModelData(t *testing.T) {
 		fmt.Fprint(w, `{"data":[{"id":"meta-llama/Llama-3-8B"}]}`)
 	})
 
-	name, err := VLLMGetModelData()
+	name, err := VLLMGetModelData(context.Background())
 	if err != nil {
 		t.Fatalf("VLLMGetModelData: %v", err)
 	}
@@ -245,7 +282,7 @@ func TestVLLMGetModelDataNoModel(t *testing.T) {
 		fmt.Fprint(w, `{"data":[]}`)
 	})
 
-	if _, err := VLLMGetModelData(); err == nil {
+	if _, err := VLLMGetModelData(context.Background()); err == nil {
 		t.Fatal("empty model list should error")
 	}
 }
@@ -255,7 +292,7 @@ func TestVLLMGetModelDataNeedsKey(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	})
 
-	if _, err := VLLMGetModelData(); !errors.Is(err, ErrNeedsKey) {
+	if _, err := VLLMGetModelData(context.Background()); !errors.Is(err, ErrNeedsKey) {
 		t.Fatalf("want ErrNeedsKey, got %v", err)
 	}
 }
@@ -275,7 +312,7 @@ func TestVLLMGetModelContextLength(t *testing.T) {
 			stubProvider(t, &vllmClient, func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, tc.body)
 			})
-			got, err := VLLMGetModelContextLength()
+			got, err := VLLMGetModelContextLength(context.Background())
 			if err != nil {
 				t.Fatalf("VLLMGetModelContextLength: %v", err)
 			}
@@ -291,7 +328,7 @@ func TestVLLMGetModelContextLengthNoModel(t *testing.T) {
 		fmt.Fprint(w, `{"data":[]}`)
 	})
 
-	if _, err := VLLMGetModelContextLength(); err == nil {
+	if _, err := VLLMGetModelContextLength(context.Background()); err == nil {
 		t.Fatal("no model loaded should error")
 	}
 }
@@ -313,7 +350,7 @@ func TestVLLMRunSmokeTestNativeAndFallback(t *testing.T) {
 			stubProvider(t, &vllmClient, func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, tc.body)
 			})
-			got, err := VLLMRunSmokeTest("m")
+			got, err := VLLMRunSmokeTest(context.Background(), "m")
 			if err != nil {
 				t.Fatalf("VLLMRunSmokeTest: %v", err)
 			}
@@ -349,7 +386,7 @@ func TestVLLMRunSmokeTestBadRequests(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, tc.body)
 			})
-			ok, err := VLLMRunSmokeTest("m")
+			ok, err := VLLMRunSmokeTest(context.Background(), "m")
 			if tc.wantErr && err == nil {
 				t.Fatal("want error, got nil")
 			}
@@ -368,7 +405,7 @@ func TestVLLMRunSmokeTestNeedsKey(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	})
 
-	if _, err := VLLMRunSmokeTest("m"); !errors.Is(err, ErrNeedsKey) {
+	if _, err := VLLMRunSmokeTest(context.Background(), "m"); !errors.Is(err, ErrNeedsKey) {
 		t.Fatalf("want ErrNeedsKey, got %v", err)
 	}
 }
@@ -379,7 +416,7 @@ func TestVLLMRunSmokeTestMalformedRequest(t *testing.T) {
 		fmt.Fprint(w, "bad request")
 	})
 
-	if _, err := VLLMRunSmokeTest("m"); err == nil {
+	if _, err := VLLMRunSmokeTest(context.Background(), "m"); err == nil {
 		t.Fatal("422 should error")
 	}
 }
@@ -390,7 +427,86 @@ func TestVLLMRunSmokeTestUnexpectedStatus(t *testing.T) {
 		fmt.Fprint(w, "boom")
 	})
 
-	if _, err := VLLMRunSmokeTest("m"); err == nil {
+	if _, err := VLLMRunSmokeTest(context.Background(), "m"); err == nil {
 		t.Fatal("5xx should error, not silently downgrade")
+	}
+}
+
+// Provider calls on the /model path honor the caller's context, so leaving the
+// TUI aborts an in-flight load or probe instead of waiting for the client
+// timeout.
+func TestModelProviderCallsHonorContext(t *testing.T) {
+	cases := []struct {
+		name   string
+		client **http.Client
+		call   func(context.Context) error
+	}{
+		{
+			name:   "ollama load",
+			client: &ollamaModelLoader,
+			call: func(ctx context.Context) error {
+				return OllamaLoadModel(ctx, "llama3:8b")
+			},
+		},
+		{
+			name:   "ollama tags",
+			client: &ollamaClient,
+			call: func(ctx context.Context) error {
+				_, err := OllamaGetModelData(ctx)
+				return err
+			},
+		},
+		{
+			name:   "vllm models",
+			client: &vllmClient,
+			call: func(ctx context.Context) error {
+				_, err := VLLMGetModelData(ctx)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+
+			stubProvider(t, tc.client, func(w http.ResponseWriter, r *http.Request) {
+				// The server only starts its disconnect-detecting background
+				// read after the request body is fully consumed. Drain it
+				// first, or the handler never observes the cancellation.
+				_, _ = io.Copy(io.Discard, r.Body)
+				close(started)
+
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			})
+			// Cleanups run LIFO: release the handler before stubProvider's
+			// srv.Close, which would otherwise wait forever.
+			t.Cleanup(func() { close(release) })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			resultErr := make(chan error, 1)
+			go func() { resultErr <- tc.call(ctx) }()
+
+			select {
+			case <-started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("fake server never saw the request")
+			}
+
+			cancel()
+
+			select {
+			case err := <-resultErr:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("call err = %v, want context.Canceled", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("call did not return after cancellation")
+			}
+		})
 	}
 }

@@ -21,10 +21,11 @@ func commitTestSession(t *testing.T, gitStatus bool, directory string) *harnessS
 		ContextLimit: 4096,
 		MaxTurns:     55,
 		GitStatus:    gitStatus,
+		ToolCall:     true,
 	})
 	saved.BeginRun()
 	saved.AppendUser("earlier question")
-	*saved.Ollama() = append(*saved.Ollama(),
+	*saved.OllamaNative() = append(*saved.OllamaNative(),
 		&dataTypes.NativeTooltypeMessage{Role: "assistant", Content: "earlier answer"},
 	)
 
@@ -117,5 +118,43 @@ func TestSessionForRunRejectsDifferentDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "resume it from that directory") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestSessionForRunAlignsKindToCfgProvider ensures a resumed session whose
+// saved kind/provider pair is decoupled from the active config gets realigned
+// so the looper kind guard passes.
+func TestSessionForRunAlignsKindToCfgProvider(t *testing.T) {
+	freshAuth(t)
+
+	cwd := t.TempDir()
+	saved := commitTestSession(t, false, cwd)
+
+	// The saved session is Ollama; run it under the Openrouter config.
+	loaded, err := sessionForRun(harnessSession.Config{
+		Provider:     "Openrouter",
+		Model:        "anthropic/claude-3",
+		Directory:    cwd,
+		Kind:         harnessSession.OllamaNative,
+		ContextLimit: 4096,
+		MaxTurns:     55,
+		GitStatus:    saved.GitStatus,
+		LocalOnly:    saved.LocalOnly,
+		ToolCall:     saved.ToolCall,
+	}, saved.UID)
+	if err != nil {
+		t.Fatalf("sessionForRun: %v", err)
+	}
+
+	if loaded.Provider != "Openrouter" {
+		t.Fatalf("provider = %q, want %q", loaded.Provider, "Openrouter")
+	}
+	if loaded.Kind != harnessSession.OpenAICompatNative {
+		t.Fatalf("kind = %q, want %q", loaded.Kind, harnessSession.OpenAICompatNative)
+	}
+
+	// The system prompt must be rebuilt for the reconciled protocol.
+	if strings.TrimSpace(loaded.SystemPrompt) == "" {
+		t.Fatal("system prompt not rebuilt on reconcile")
 	}
 }

@@ -16,10 +16,10 @@ import (
 
 // AgentLoop runs one user message against the session's history.
 func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader) (string, error) {
-	// A format mismatch would append into the wrong slot.
-	if err := sess.Resumeable(harnessSession.KindFor(agentConfig.Provider, agentConfig.NativeToolCalling)); err != nil {
-		return "", err
-	}
+
+	// kind agnostic.
+	sess.Kind = harnessSession.KindFor(agentConfig.Provider, agentConfig.NativeToolCalling)
+	sess.ToolCall = agentConfig.NativeToolCalling
 
 	configDir := filepath.Dir(harnessPermissions.AuthPath)
 	userMessageCount := sess.TotalUserMessages + 1
@@ -69,7 +69,6 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 	if commitErr := harnessSession.Commit(sess); commitErr != nil {
 		log.Printf("session %s: could not save history: %v", sess.UID, commitErr)
 	}
-
 	// takes another snapshot right after the agent is finished processing users request
 
 	snapshotIDAfter := fmt.Sprintf("%s-after-%d", sess.UID, userMessageCount)

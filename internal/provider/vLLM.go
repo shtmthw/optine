@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,8 +40,13 @@ func bodySnippet(r io.Reader) string {
 	return string(b)
 }
 
-func VLLMGetModelData() (string, error) {
-	resp, err := vllmClient.Get("http://localhost:8000/v1/models")
+func VLLMGetModelData(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:8000/v1/models", nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := vllmClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -72,8 +78,13 @@ func VLLMGetModelData() (string, error) {
 
 // VLLMGetModelContextLength asks /v1/models for the loaded model's context
 // window. Zero means the server did not report one (the caller falls back).
-func VLLMGetModelContextLength() (int, error) {
-	resp, err := vllmClient.Get("http://localhost:8000/v1/models")
+func VLLMGetModelContextLength(ctx context.Context) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:8000/v1/models", nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := vllmClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -102,7 +113,7 @@ func VLLMGetModelContextLength() (int, error) {
 
 // VLLMRunSmokeTest reports whether native tool calling works. A nil error with
 // false means native tools are unavailable; an error means the test could not run.
-func VLLMRunSmokeTest(modelName string) (bool, error) {
+func VLLMRunSmokeTest(ctx context.Context, modelName string) (bool, error) {
 
 	payload := map[string]any{
 		"model": modelName,
@@ -140,11 +151,18 @@ func VLLMRunSmokeTest(modelName string) (bool, error) {
 		return false, err
 	}
 
-	resp, err := vllmClient.Post(
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
 		"http://localhost:8000/v1/chat/completions",
-		"application/json",
 		bytes.NewReader(body),
 	)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := vllmClient.Do(req)
 	if err != nil {
 		return false, err
 	}

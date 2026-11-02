@@ -115,15 +115,11 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 			log.Printf("Error: %v", providerErr)
 			return false
 		}
-		isNativeToolSupportive := true
-
-		if availableSess[0].Kind == "envelope" {
-			isNativeToolSupportive = false
-		}
+		isNativeToolSupportive := availableSess[0].ToolCall
 
 		log.Println("Resuming the last session related to this directory...")
 
-		if err := RunAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID, true); err != nil {
+		if err := RunAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID, true, false); err != nil {
 			log.Printf("error occurred while trying to initiate the agent, err: %v", err)
 			return false
 		}

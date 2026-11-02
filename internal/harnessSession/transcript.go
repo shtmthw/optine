@@ -37,9 +37,9 @@ func (s *Session) Transcript() []TranscriptEntry {
 
 	switch s.Kind {
 	case OllamaNative:
-		return ollamaTranscript(s.ollama)
+		return ollamaTranscript(s.ollamaNative)
 	case OpenAICompatNative:
-		return openAITranscript(s.openAI)
+		return openAITranscript(s.openAIChatCompletions)
 	case Envelope:
 		return envelopeTranscript(s.envelope)
 	}

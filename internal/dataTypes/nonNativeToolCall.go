@@ -18,22 +18,22 @@ type NonNativeChatResponse struct {
 	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
 }
 
-// OpenAI-compatible non-native shapes served by vLLM, where "format":"json"
-// is spelled "response_format".
+// OpenAI-compatible non-native shapes served by vLLM and OpenRouter, where
+// "format":"json" is spelled "response_format".
 
-// NonNativeResponseFormat is vLLM's equivalent of Ollama's Format: "json".
+// NonNativeResponseFormat is the OpenAI spelling of Ollama's Format: "json".
 type NonNativeResponseFormat struct {
 	Type string `json:"type"`
 }
 
-type VLLMNonNativeChatRequest struct {
+type OpenAINonNativeChatRequest struct {
 	Model          string                   `json:"model"`
 	Messages       []*NonNativeMessage      `json:"messages"`
 	Stream         bool                     `json:"stream"`
 	ResponseFormat *NonNativeResponseFormat `json:"response_format,omitempty"`
 }
 
-type VLLMNonNativeChatResponse struct {
+type OpenAINonNativeChatResponse struct {
 	Choices []struct {
 		Index   int              `json:"index"`
 		Message NonNativeMessage `json:"message"`

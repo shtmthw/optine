@@ -1,38 +1,43 @@
 # optine
 
 optine is a local first, open source terminal agent for self hosted LLMs.
-It runs entirely on your machine, talks to Ollama or vLLM, and gives the
-model tools while keeping every mutating action behind your approval.
+It runs locally, talks to Ollama or vLLM, and can also reach hosted models
+through OpenRouter when you supply a key. It gives the model tools while
+keeping every mutating action behind your approval.
 
 ## What optine does
 
-Type /local and pick a running provider. optine probes your models, checks
-whether they support tool calling, and drops you into a terminal interface
-where the model can search the web, read files, edit files, create files
-and run bash commands. Models with native tool calling use it directly.
-Models without it fall back to a JSON envelope protocol, so small local
-models get the same harness. Every conversation is a session: history and
-file snapshots are saved as you go, /resume brings one back after a restart,
-and /revert restores the files from the latest run.
+Type /local and pick a running provider, or /remote to start on a hosted
+OpenRouter model. optine probes your models, checks whether they support tool
+calling, and drops you into a terminal interface where the model can search the
+web, read files, edit files, create files and run bash commands. Models with
+native tool calling use it directly. Models without it fall back to a JSON
+envelope protocol, so small local models get the same harness. Inside the
+interface, /model switches the model and rewrites the session's system prompt
+for the new tool mode. Every conversation is a session: history, the system
+prompt and file snapshots are saved as you go, /resume brings one back after a
+restart, and /revert restores the files from the latest run.
 
 ## Features
 
-1. Provider loops for Ollama and vLLM, with a JSON envelope fallback for models without native tool calling
+1. Provider loops for Ollama, vLLM and OpenRouter, with a JSON envelope fallback for models without native tool calling on all three
 2. Five tools: web_search, read_file, bash, edit_file, write_file
 3. A bash classifier that parses every command into the paths it touches and the effects it has, and denies anything it cannot analyze
 4. Shared directory approvals for the file tools, plus session scoped grants per exact command and directory for bash
 5. A JSONL audit log recorded before any action executes
 6. Long term casual memory the model keeps in a plain file you can watch
-7. A terminal interface with clickable approval prompts, markdown output, copy shortcuts and cached conversation rendering
-8. Sessional memory: conversation history saved under your user config directory and reloaded with /resume from the same working directory, including the snapshot backend chosen when the session started, and replayed in the TUI
-9. Before/after file snapshots for every run and /revert to restore changed or deleted files from the latest run and remove files it created
+7. In-session /model switching: optine re-probes the chosen model's tool support and context window and rewrites the session's system prompt for the matching protocol
+8. A terminal interface with clickable approval prompts, interactive model and session pickers, markdown output, copy shortcuts and cached conversation rendering
+9. Sessional memory: conversation history, the tool-call mode and the composed system prompt are saved under your user config directory and reloaded with /resume, including the snapshot backend chosen when the session started, and replayed in the TUI
+10. Before/after file snapshots for every run and /revert to restore changed or deleted files from the latest run and remove files it created
 
 ## Requirements
 
 1. Go 1.27.2, pinned in go.mod
 2. Linux or macOS for the bash tool
 3. Ollama running on localhost:11434, or vLLM on localhost:8000
-4. Optional: git for the git-backed snapshot backend; without it, snapshots use a content-addressed store
+4. Optional: an OpenRouter API key, set with /connect, to run hosted models
+5. Optional: git for the git-backed snapshot backend; without it, snapshots use a content-addressed store
 
 ## Build and run
 
@@ -41,8 +46,10 @@ go build ./...
 ./optine
 ```
 
-Type /local to start. /help lists commands, /resume lists saved sessions,
-/revert restores files from the latest run, /quit exits.
+Type /local to start on a local model, or /remote to start on a hosted
+OpenRouter model (set a key with /connect first). Inside the interface, /model
+switches models, /resume reopens a saved session, /revert restores files from
+the latest run, and /quit exits. /help lists every command.
 
 ## Sessions
 
@@ -52,18 +59,30 @@ directory, for example ~/.config/optine/sessions/ on Linux, along with the
 provider, model, directory and prompt token count. Sessions are written
 atomically, so quitting early cannot leave half a file behind.
 
-/resume lists saved sessions for the current provider, tool mode and working
-directory, and /resume last loads the newest one. A resumed session's saved
-conversation is shown in the terminal interface before you type again, so the
-previous user and assistant messages are visible in context. Sessions are
-scoped to the directory they started in because both the tools and the
-snapshot history belong to that working directory. Resume from the same
-directory you launched optine from; sessions started elsewhere are not offered.
+Run /resume before the terminal interface starts to load the newest saved
+session for the current working directory. Inside the interface, /resume opens
+an interactive picker of saved sessions showing each model, its number of user
+turns and when it was last saved; picking one replaces the transcript with that
+conversation, so the previous user and assistant messages are visible in
+context. A session records the directory it started in, because both the tools
+and the snapshot history belong to that working directory.
+
+A session also stores its tool-call mode and its composed system prompt, so a
+resumed run continues with the same protocol and prompt it was saved with.
 
 The snapshot backend is chosen once when a session is created and stored with
 it. Resuming never re-detects git, so a session created with git snapshots
 keeps them, and a session created with content-addressed snapshots keeps those,
 even if git is installed or removed later.
+
+## System prompts
+
+Each session has a single system prompt, composed from the tool protocol
+(native tool calling or the JSON envelope), the available crawlers, the casual
+memory notebook and the model's turn budget. It is written to the session file,
+so a resumed run picks up the same prompt. optine rebuilds and re-saves it when
+its inputs change: the notebook is edited, crawler availability changes, or
+/model switches the model's tool support.
 
 ## Reverting files
 
@@ -118,15 +137,22 @@ casualMemory.md, sessions/ and the snapshot stores on Linux.
 6. internal/harnessTools, tool execution
 7. internal/harnessMemory, the casual memory notebook
 8. internal/systemPrompts, prompt text
-9. internal/provider, server probing and capability checks
-10. internal/cli, provider and model pickers
-11. internal/tui, the terminal interface
+9. internal/approval, the "a human answer is needed" bridge between the harness and the active interface
+10. internal/provider, server probing and capability checks
+11. internal/dataTypes, the shared provider request, response and message types
+12. internal/cli, the provider, model and session pickers
+13. internal/tui, the terminal interface
 
 ## Status
 
-Skeleton stage, built solo by Matthew Baroi. Sessions survive restarts and can
-be resumed with /resume; /revert restores file changes from the latest run.
-Planned next: transcript undo, transcript compaction, and a bash sandbox.
+Early alpha, built solo by Matthew Baroi. optine is past the skeleton stage and
+runs end to end on Ollama, vLLM and OpenRouter, with five tools, approvals and
+an audit log, before/after snapshots with /revert, persisted sessions that
+survive restarts and reopen through an interactive /resume picker, in-session
+/model switching that rewrites the saved system prompt, and a cached terminal
+interface. Planned next: transcript undo, transcript compaction, a bash
+sandbox, and hosted OpenAI and Anthropic providers (their /connect keys are
+stored today, but those loops are still under development).
 
 ## License
 

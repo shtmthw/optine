@@ -23,6 +23,7 @@ func TestOpenRouterLoopToolCallRoundTrip(t *testing.T) {
 
 	var reqCount int
 	var gotAuth, gotTitle, sawTool bool
+	var firstRole, firstContent string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
@@ -39,7 +40,11 @@ func TestOpenRouterLoopToolCallRoundTrip(t *testing.T) {
 			Messages []map[string]any `json:"messages"`
 		}
 		_ = json.Unmarshal(body, &req)
-		for _, m := range req.Messages {
+		for i, m := range req.Messages {
+			if i == 0 {
+				firstRole, _ = m["role"].(string)
+				firstContent, _ = m["content"].(string)
+			}
 			if m["role"] == "tool" && m["tool_call_id"] == "call_1" {
 				sawTool = true
 			}
@@ -70,5 +75,13 @@ func TestOpenRouterLoopToolCallRoundTrip(t *testing.T) {
 	}
 	if !sawTool {
 		t.Fatal("tool result not round-tripped to provider")
+	}
+	if firstRole != "system" || strings.TrimSpace(firstContent) == "" {
+		t.Fatalf("system prompt not prepended to the request: role=%q", firstRole)
+	}
+	for i, msg := range *sess.OpenAIChatCompletions() {
+		if msg.Role == "system" {
+			t.Fatalf("system prompt leaked into session history at index %d", i)
+		}
 	}
 }

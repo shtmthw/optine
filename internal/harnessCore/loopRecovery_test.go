@@ -24,6 +24,7 @@ func testSession(t *testing.T, kind harnessSession.Kind) *harnessSession.Session
 		Model:    "test-model",
 		Kind:     kind,
 		MaxTurns: MaxTurns,
+		ToolCall: kind != harnessSession.Envelope,
 	})
 }
 
@@ -65,5 +66,75 @@ func TestVLLMMalformedBodiesAbortAfterBudget(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(calls); got != maxBadBodies+1 {
 		t.Fatalf("want %d provider calls (1 + %d retries), got %d", maxBadBodies+1, maxBadBodies, got)
+	}
+}
+
+func envelopeChatURLs() map[string]*string {
+	return map[string]*string{
+		"Ollama":     &ollamaChatURL,
+		"vLLM":       &vLLMChatURL,
+		"Openrouter": &openRouterChatURL,
+	}
+}
+
+func TestNonNativeMalformedHTTPBodyAbortsAfterBudget(t *testing.T) {
+	for provider, urlVar := range envelopeChatURLs() {
+		t.Run(provider, func(t *testing.T) {
+			if provider == "Openrouter" {
+				stubOpenRouterAuth(t, "secret")
+			}
+
+			reader := bufio.NewReader(strings.NewReader(""))
+			calls := garbageServer(t, urlVar)
+			_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, provider, "test-model")
+			if !errors.Is(err, ErrMalformedJSON) {
+				t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
+			}
+			if got := atomic.LoadInt64(calls); got != maxBadBodies+1 {
+				t.Fatalf("want %d provider calls (1 + %d retries), got %d", maxBadBodies+1, maxBadBodies, got)
+			}
+		})
+	}
+}
+
+func TestNonNativeMalformedHTTPBodyRecovers(t *testing.T) {
+	wrappers := map[string]func(string) string{
+		"Ollama":     ollamaEnvelopeBody,
+		"vLLM":       vllmEnvelopeBody,
+		"Openrouter": vllmEnvelopeBody,
+	}
+
+	for provider, wrapBody := range wrappers {
+		t.Run(provider, func(t *testing.T) {
+			if provider == "Openrouter" {
+				stubOpenRouterAuth(t, "secret")
+			}
+
+			calls := scriptedJSONServer(t, envelopeChatURLs()[provider], func(call int64) string {
+				if call <= 2 {
+					return "not json {{{"
+				}
+				return wrapBody(envelopeFinalAnswer)
+			})
+
+			sess := testSession(t, harnessSession.Envelope)
+			reader := bufio.NewReader(strings.NewReader(""))
+			out, err := nonNativeAgentCall(context.Background(), sess, reader, provider, "test-model")
+			if err != nil {
+				t.Fatalf("want recovery with answer, got error: %v", err)
+			}
+			if out != "done" {
+				t.Fatalf("want %q, got %q", "done", out)
+			}
+			if got := atomic.LoadInt64(calls); got != 3 {
+				t.Fatalf("want 3 provider calls (2 corrections + success), got %d", got)
+			}
+
+			msgs := *sess.Envelope()
+			last := msgs[len(msgs)-1]
+			if last.Role != "assistant" || !strings.Contains(last.Content, "final_answer") {
+				t.Fatalf("final assistant envelope missing from history: %+v", last)
+			}
+		})
 	}
 }

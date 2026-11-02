@@ -3,11 +3,13 @@ package tui
 import (
 	"bufio"
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 // newTestModel builds a Model with a no-op agent and an empty approval reader,
@@ -267,6 +269,13 @@ func TestSessionChangedMsgUpdatesUID(t *testing.T) {
 	}
 }
 
+func TestModelChangedMsgUpdatesStatusLine(t *testing.T) {
+	m, _ := update(newTestModel(), modelChangedMsg{provider: "vLLM", model: "new-model"})
+	if m.provider != "vLLM" || m.modelName != "new-model" {
+		t.Fatalf("modelChangedMsg: provider=%q model=%q", m.provider, m.modelName)
+	}
+}
+
 // ---------------------------------------------------------------- approvals
 
 // An approval request flags the prompt and resets scroll so it is visible.
@@ -427,4 +436,303 @@ func TestViewShowsSpinnerWhenBusy(t *testing.T) {
 	if !strings.Contains(m.View(), "thinking...") {
 		t.Fatal("busy model should show the spinner")
 	}
+}
+
+// The model-load loader replaces the busy spinner while /model loads a model.
+func TestViewShowsModelLoadingLoader(t *testing.T) {
+	m := newTestModel()
+	m, _ = update(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.busy = true
+	m, _ = update(m, modelLoadingMsg{active: true, model: "qwen2.5:7b"})
+
+	if !m.modelLoading || m.loadingModel != "qwen2.5:7b" {
+		t.Fatalf("loading state = %v/%q", m.modelLoading, m.loadingModel)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "loading qwen2.5:7b...") {
+		t.Fatal("model loading should show the loader row")
+	}
+	if strings.Contains(view, "thinking...") {
+		t.Fatal("model loading should replace the thinking spinner")
+	}
+
+	m, _ = update(m, modelLoadingMsg{active: false})
+	if strings.Contains(m.View(), "loading qwen2.5:7b...") {
+		t.Fatal("cleared loading state should hide the loader")
+	}
+	if !strings.Contains(m.View(), "thinking...") {
+		t.Fatal("busy model should fall back to the thinking spinner")
+	}
+}
+
+// The model-load loader keeps the spinner ticking.
+func TestModelLoadingTicksSpinner(t *testing.T) {
+	m := newTestModel()
+	m, _ = update(m, modelLoadingMsg{active: true, model: "m"})
+	frame := m.spinnerFrame
+
+	m, cmd := update(m, tickMsg{})
+	if cmd == nil {
+		t.Fatal("loading model should keep the spinner ticking")
+	}
+	if want := (frame + 1) % len(spinnerFrames); m.spinnerFrame != want {
+		t.Fatalf("spinner frame = %d, want %d", m.spinnerFrame, want)
+	}
+}
+
+// ---------------------------------------------------------------- pickers
+
+// openTestPicker applies a pickerOpenMsg and returns the updated model.
+func openTestPicker(t *testing.T, m Model, msg pickerOpenMsg) Model {
+	t.Helper()
+	m, _ = update(m, msg)
+	return m
+}
+
+func testSessionMetas() []harnessSession.Meta {
+	return []harnessSession.Meta{
+		{UID: "sess-a", Model: "model-1", TotalUserMessages: 3, UpdatedAt: time.Unix(1000, 0)},
+		{UID: "sess-b", Model: "model-2", TotalUserMessages: 7, UpdatedAt: time.Unix(2000, 0)},
+	}
+}
+
+// pickerCounterLine returns the search-box line that carries the n/total
+// counter, proving the counter is rendered inside the box on every frame.
+func pickerCounterLine(t *testing.T, view string) string {
+	t.Helper()
+	for _, line := range strings.Split(plainText(view), "\n") {
+		if pickerCounterSuffix.MatchString(line) {
+			return line
+		}
+	}
+	t.Fatalf("no picker counter line in view:\n%s", plainText(view))
+
+	return ""
+}
+
+var pickerCounterSuffix = regexp.MustCompile(`\d+/\d+ │`)
+
+// assertPickerCounter checks that want is the last text in the search box,
+// i.e. flush against the search box's right border.
+func assertPickerCounter(t *testing.T, line, want string) {
+	t.Helper()
+	re := regexp.MustCompile(regexp.QuoteMeta(want) + ` │\s*│$`)
+	if !re.MatchString(line) {
+		t.Fatalf("counter %q not pinned to the search box's right edge: %q", want, line)
+	}
+}
+
+func TestPickerOpenSessionPopulatesState(t *testing.T) {
+	metas := testSessionMetas()
+	result := make(chan string, 1)
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{kind: pickerSession, metas: metas, result: result})
+
+	if !m.picker.active() || m.picker.kind != pickerSession {
+		t.Fatalf("picker kind = %v, want session", m.picker.kind)
+	}
+	if len(m.picker.choices) != 2 || m.picker.choices[0] != "sess-a" || m.picker.choices[1] != "sess-b" {
+		t.Fatalf("session choices = %v", m.picker.choices)
+	}
+	if len(m.picker.metas) != 2 || m.picker.metas[0].UID != "sess-a" {
+		t.Fatalf("session meta = %+v", m.picker.metas)
+	}
+	if m.picker.result != result {
+		t.Fatal("result channel not stored")
+	}
+	if m.picker.cursor != 0 || m.picker.scroll != 0 || m.input != "" {
+		t.Fatalf("cursor/scroll/input not reset: %d %d %q", m.picker.cursor, m.picker.scroll, m.input)
+	}
+}
+
+func TestSessionPickerEnterSendsSelectedUID(t *testing.T) {
+	result := make(chan string, 1)
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{
+		kind: pickerSession, metas: testSessionMetas(), result: result,
+	})
+	m.picker.cursor = 1
+
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.picker.active() {
+		t.Fatal("picker should close on enter")
+	}
+	select {
+	case got := <-result:
+		if got != "sess-b" {
+			t.Fatalf("selected = %q, want sess-b", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result not sent on enter")
+	}
+}
+
+func TestSessionPickerEscSendsEmpty(t *testing.T) {
+	result := make(chan string, 1)
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{
+		kind: pickerSession, metas: testSessionMetas(), result: result,
+	})
+
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.picker.active() {
+		t.Fatal("picker should close on esc")
+	}
+	select {
+	case got := <-result:
+		if got != "" {
+			t.Fatalf("cancel = %q, want empty", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result not sent on esc")
+	}
+}
+
+func TestSessionPickerSearchFiltersChoices(t *testing.T) {
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{
+		kind: pickerSession,
+		metas: []harnessSession.Meta{
+			{UID: "sess-alpha", Model: "m", Messages: 1, UpdatedAt: time.Now()},
+			{UID: "sess-beta", Model: "m", Messages: 1, UpdatedAt: time.Now()},
+			{UID: "other", Model: "m", Messages: 1, UpdatedAt: time.Now()},
+		},
+		result: make(chan string, 1),
+	})
+	m = typeKey(m, "alpha")
+
+	if len(m.picker.choices) != 1 || m.picker.choices[0] != "sess-alpha" {
+		t.Fatalf("filtered choices = %v", m.picker.choices)
+	}
+	if len(m.picker.metas) != 1 || m.picker.metas[0].UID != "sess-alpha" {
+		t.Fatalf("filtered metas = %+v", m.picker.metas)
+	}
+	if m.picker.cursor != 0 {
+		t.Fatalf("cursor should reset after filter, got %d", m.picker.cursor)
+	}
+}
+
+func TestSessionPickerViewRenders(t *testing.T) {
+	m := newTestModelAt(80, 24)
+	m = openTestPicker(t, m, pickerOpenMsg{
+		kind: pickerSession, metas: testSessionMetas(), result: make(chan string, 1),
+	})
+
+	out := m.View()
+	for _, want := range []string{"Select a session", "sess-a", "model-1", "3 messages", "saved"} {
+		if !strings.Contains(plainText(out), want) {
+			t.Fatalf("session picker view missing %q:\n%s", want, plainText(out))
+		}
+	}
+	assertPickerCounter(t, pickerCounterLine(t, out), "1/2")
+}
+
+func TestModelPickerEnterSendsSelectedModel(t *testing.T) {
+	result := make(chan string, 1)
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{
+		kind: pickerModel, choices: []string{"model-a", "model-b"}, result: result,
+	})
+	m.picker.cursor = 1
+
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.picker.active() {
+		t.Fatal("picker should close on enter")
+	}
+	if m.modelName != "model-b" {
+		t.Fatalf("modelName = %q, want model-b", m.modelName)
+	}
+	select {
+	case got := <-result:
+		if got != "model-b" {
+			t.Fatalf("selected = %q, want model-b", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result not sent on enter")
+	}
+}
+
+func TestModelPickerEscSendsEmpty(t *testing.T) {
+	result := make(chan string, 1)
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{
+		kind: pickerModel, choices: []string{"model-a"}, result: result,
+	})
+
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.picker.active() {
+		t.Fatal("picker should close on esc")
+	}
+	select {
+	case got := <-result:
+		if got != "" {
+			t.Fatalf("cancel = %q, want empty", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result not sent on esc")
+	}
+}
+
+func TestModelPickerSearchFiltersChoices(t *testing.T) {
+	m := openTestPicker(t, newTestModel(), pickerOpenMsg{
+		kind:    pickerModel,
+		choices: []string{"llama3:8b", "qwen2.5:7b", "mistral:7b"},
+		result:  make(chan string, 1),
+	})
+	m = typeKey(m, "QWEN")
+
+	if len(m.picker.choices) != 1 || m.picker.choices[0] != "qwen2.5:7b" {
+		t.Fatalf("filtered choices = %v", m.picker.choices)
+	}
+	if m.picker.cursor != 0 {
+		t.Fatalf("cursor should reset after filter, got %d", m.picker.cursor)
+	}
+	if m.input != "QWEN" {
+		t.Fatalf("input = %q, want QWEN", m.input)
+	}
+}
+
+func TestModelPickerViewRenders(t *testing.T) {
+	m := newTestModelAt(80, 24)
+	m = openTestPicker(t, m, pickerOpenMsg{
+		kind: pickerModel, choices: []string{"llama3:8b"}, result: make(chan string, 1),
+	})
+
+	out := m.View()
+	for _, want := range []string{"Select a model", "llama3:8b"} {
+		if !strings.Contains(plainText(out), want) {
+			t.Fatalf("model picker view missing %q:\n%s", want, plainText(out))
+		}
+	}
+	assertPickerCounter(t, pickerCounterLine(t, out), "1/1")
+}
+
+func TestPickerCounterAlwaysVisibleAndPinnedRight(t *testing.T) {
+	m := newTestModelAt(80, 24)
+	m = openTestPicker(t, m, pickerOpenMsg{
+		kind:    pickerModel,
+		choices: []string{"model-a", "model-b", "model-c"},
+		result:  make(chan string, 1),
+	})
+
+	assertPickerCounter(t, pickerCounterLine(t, m.View()), "1/3")
+}
+
+func TestPickerCounterTracksFilter(t *testing.T) {
+	m := newTestModelAt(80, 24)
+	m = openTestPicker(t, m, pickerOpenMsg{
+		kind:    pickerModel,
+		choices: []string{"model-a", "model-b", "model-c"},
+		result:  make(chan string, 1),
+	})
+	m = typeKey(m, "model-c")
+
+	assertPickerCounter(t, pickerCounterLine(t, m.View()), "1/1")
+}
+
+func TestPickerCounterEmptyFilterShowsZero(t *testing.T) {
+	m := newTestModelAt(80, 24)
+	m = openTestPicker(t, m, pickerOpenMsg{
+		kind:    pickerModel,
+		choices: []string{"model-a"},
+		result:  make(chan string, 1),
+	})
+	m = typeKey(m, "zzz")
+
+	assertPickerCounter(t, pickerCounterLine(t, m.View()), "0/0")
 }

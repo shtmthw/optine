@@ -33,6 +33,14 @@ var connections = []string{
 	"Openrouter",
 }
 
+// pickSession opens the session picker. It is a variable so tests can drive
+// /resume without a live TUI.
+var pickSession = tui.PickSession
+
+// notifyModelChanged updates the active TUI's provider/model line. It is a
+// variable so tests can observe the call without a live TUI.
+var notifyModelChanged = tui.NotifyModelChanged
+
 func handleError(err error) error {
 	log.Println(err)
 	return err
@@ -74,7 +82,7 @@ func selectProvider(reader *bufio.Reader) error {
 
 	switch selectedProvider {
 	case "Ollama":
-		modelSlice, err := provider.OllamaGetModelData()
+		modelSlice, err := provider.OllamaGetModelData(context.Background())
 
 		if err != nil {
 			return err
@@ -92,7 +100,7 @@ func selectProvider(reader *bufio.Reader) error {
 			return fmt.Errorf("model name cant be empty, this is the backends fault not users")
 		}
 
-		modelMetaData, err := provider.OllamaGetModelMetaData(selectedModel)
+		modelMetaData, err := provider.OllamaGetModelMetaData(context.Background(), selectedModel)
 
 		if err != nil {
 			log.Println("selector conn ref run")
@@ -105,17 +113,23 @@ func selectProvider(reader *bufio.Reader) error {
 		log.Println("Tool calling available:", hasTools)
 		log.Println("Capablities: ", modelMetaData.Capabilities)
 
+		var ctxLimit int
 		if err := withSpinner(fmt.Sprintf("Loading %s into Ollama", selectedModel), func() error {
-			return provider.OllamaLoadModel(selectedModel)
+			cl, err := provider.OllamaContextLength(context.Background(), selectedModel)
+			if err != nil {
+				return err
+			}
+			ctxLimit = cl
+			return nil
 		}); err != nil {
 			return fmt.Errorf("loading model %q in Ollama: %w", selectedModel, err)
 		}
 
 		log.Printf("Model %s loaded", selectedModel)
-		return RunAgentSession("Ollama", selectedModel, hasTools, modelMetaData.ContextLength(selectedModel), "", false)
+		return RunAgentSession("Ollama", selectedModel, hasTools, ctxLimit, "", false, true)
 
 	case "vLLM":
-		modelName, err := provider.VLLMGetModelData()
+		modelName, err := provider.VLLMGetModelData(context.Background())
 
 		if err != nil {
 			return err
@@ -123,7 +137,7 @@ func selectProvider(reader *bufio.Reader) error {
 
 		log.Println("Initializing model: ", modelName)
 
-		nativeToolCall, err := provider.VLLMRunSmokeTest(modelName)
+		nativeToolCall, err := provider.VLLMRunSmokeTest(context.Background(), modelName)
 
 		if err != nil {
 			return handleError(err)
@@ -132,18 +146,18 @@ func selectProvider(reader *bufio.Reader) error {
 
 		log.Println("Tool calling available:", nativeToolCall)
 
-		contextLimit, err := provider.VLLMGetModelContextLength()
+		contextLimit, err := provider.VLLMGetModelContextLength(context.Background())
 		if err != nil {
 			log.Printf("vLLM context window probe failed: %v", err)
 		}
-		return RunAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "", false)
+		return RunAgentSession("vLLM", modelName, nativeToolCall, contextLimit, "", false, true)
 	}
 
 	return nil
 }
 
 // runAgentSession owns the session for the whole TUI lifetime.
-func RunAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string, fromCLI bool) error {
+func RunAgentSession(providerName string, modelName string, nativeToolCalling bool, contextLimit int, sessionUidfromCli string, fromCLI bool, localOnly bool) error {
 	// Tools run against the process working directory, so that is the
 	// session's Directory.
 	CWD, wdErr := os.Getwd()
@@ -165,6 +179,8 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 		Kind:         harnessSession.KindFor(providerName, nativeToolCalling),
 		ContextLimit: contextLimit,
 		MaxTurns:     harnessCore.MaxTurns,
+		LocalOnly:    localOnly,
+		ToolCall:     nativeToolCalling,
 	}, sessionUidfromCli)
 	if err != nil {
 		return handleError(err)
@@ -184,28 +200,47 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 		if msg == "/model" {
 			modelProviders := make(map[string]string)
 			modelToolSupport := make(map[string]bool)
+			// Only holds limits that are cheap to get (OpenRouter, vLLM).
+			// Ollama limits are resolved lazily after selection.
 			modelContextLimits := make(map[string]int)
 
-			ollamaModelNames, err := provider.OllamaGetModelData()
+			ollamaModelNames, err := provider.OllamaGetModelData(ctx)
 			if err == nil {
 				for _, model := range ollamaModelNames {
-					meta, metaErr := provider.OllamaGetModelMetaData(model)
 					hasTools := false
-					ctxLimit := 0
+					meta, metaErr := provider.OllamaGetModelMetaData(ctx, model)
 					if metaErr == nil {
 						hasTools = slices.Contains(meta.Capabilities, "tools")
-						ctxLimit = meta.ContextLength(model)
 					}
+
 					modelProviders[model] = "Ollama"
 					modelToolSupport[model] = hasTools
-					modelContextLimits[model] = ctxLimit
 				}
 			}
 
-			for _, model := range provider.AllOpenrouterModels {
-				modelProviders[model.ID] = "Openrouter"
-				modelToolSupport[model.ID] = slices.Contains(model.SupportedParameters, "tools")
-				modelContextLimits[model.ID] = model.ContextLength
+			if !sess.LocalOnly {
+				for _, model := range provider.AllOpenrouterModels {
+					modelProviders[model.ID] = "Openrouter"
+					modelToolSupport[model.ID] = slices.Contains(model.SupportedParameters, "tools")
+					modelContextLimits[model.ID] = model.ContextLength
+				}
+			}
+
+			modelName, vllmErr := provider.VLLMGetModelData(ctx)
+			if vllmErr == nil && modelName != "" {
+				hasTools, smokeErr := provider.VLLMRunSmokeTest(ctx, modelName)
+				if smokeErr != nil {
+					log.Printf("vLLM smoke test failed: %v", smokeErr)
+					hasTools = false
+				}
+				ctxLimit, ctxErr := provider.VLLMGetModelContextLength(ctx)
+				if ctxErr != nil || ctxLimit <= 0 {
+					log.Printf("vLLM context window probe failed: %v", ctxErr)
+					ctxLimit = 4096
+				}
+				modelProviders[modelName] = "vLLM"
+				modelToolSupport[modelName] = hasTools
+				modelContextLimits[modelName] = ctxLimit
 			}
 
 			ids := make([]string, 0, len(modelProviders))
@@ -217,64 +252,67 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			selected, _ := tui.PickModel(ids)
 
 			if selected != "" {
-				selectedProvider := modelProviders[selected]
-				selectedNative := modelToolSupport[selected]
-				selectedContext := modelContextLimits[selected]
+				sess.Provider = modelProviders[selected]
+				sess.Model = selected
+				sess.Kind = harnessSession.KindFor(sess.Provider, modelToolSupport[selected])
 
-				agentConf.Provider = selectedProvider
-				agentConf.Model = selected
-				agentConf.NativeToolCalling = selectedNative
-
-				if selectedProvider != sess.Provider {
-					ctxLimit := selectedContext
-					if ctxLimit <= 0 {
-						ctxLimit = sess.ContextLimit
-					}
-					newSess, err := sessionForRun(harnessSession.Config{
-						Provider:     selectedProvider,
-						Model:        selected,
-						Directory:    sess.Directory,
-						Kind:         harnessSession.KindFor(selectedProvider, selectedNative),
-						ContextLimit: ctxLimit,
-						MaxTurns:     harnessCore.MaxTurns,
-					}, "")
-					if err == nil {
-						sess = newSess
-						if harnessSession.OnActiveSession != nil {
-							harnessSession.OnActiveSession(newSess.UID)
-						}
+				var ctxLimit int
+				if sess.Provider == "Ollama" {
+					// Loads the model into memory, so run it for the selected model only.
+					tui.NotifyModelLoading(true, selected)
+					cl, clErr := provider.OllamaContextLength(ctx, selected)
+					tui.NotifyModelLoading(false, "")
+					if clErr != nil {
+						log.Printf("ollama context length for %q: %v", selected, clErr)
+					} else {
+						ctxLimit = cl
 					}
 				} else {
-					sess.Model = selected
+					ctxLimit = modelContextLimits[selected]
+				}
+				if ctxLimit <= 0 {
+					ctxLimit = 4096
 				}
 
-				sess.Provider = selectedProvider
-				sess.Model = selected
-				if selectedContext > 0 {
-					sess.ContextLimit = selectedContext
+				sess.ContextLimit = ctxLimit
+				nextNativeToolSupport := modelToolSupport[selected]
+
+				if sess.ToolCall != nextNativeToolSupport {
+					if err := harnessSession.ReplaceSessionSysPrompt(nextNativeToolSupport, sess); err != nil {
+						log.Printf("error occurred while replacing the session system prompt: %v", err)
+					}
 				}
+
+				agentConf.Provider = sess.Provider
+				agentConf.Model = sess.Model
+				agentConf.NativeToolCalling = modelToolSupport[selected]
 
 				tui.NotifyModelChanged(agentConf.Provider, agentConf.Model)
 			}
 
 			return tui.AgentResult{}, nil
 		}
+
 		if msg == "/resume" || strings.HasPrefix(msg, "/resume ") {
-			next, lines := resumeSession(sess, strings.TrimSpace(strings.TrimPrefix(msg, "/resume")))
-			if next != nil {
-				sess = next
-
-				// Replace the pane with the newly-loaded conversation.
-				return tui.AgentResult{
-					Messages: tui.TranscriptMessages(next.Transcript()),
-				}, nil
-			}
-
+			next, lines := resumeSession(sess.LocalOnly)
 			for _, line := range lines {
 				log.Println(line)
 			}
 
-			return tui.AgentResult{}, nil
+			if next == nil {
+				return tui.AgentResult{}, nil
+			}
+
+			sess = next
+
+			agentConf.Provider = sess.Provider
+			agentConf.Model = sess.Model
+			agentConf.NativeToolCalling = sess.ToolCall
+
+			// Replace the pane with the newly-loaded conversation.
+			return tui.AgentResult{
+				Messages: tui.TranscriptMessages(next.Transcript()),
+			}, nil
 		}
 
 		// Only the latest message's files are reverted; multi-message reversion
@@ -324,9 +362,10 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 	return nil
 }
 
-// resumeSession loads a saved session without blocking on input. Listing and
-// picking are plain text because an approval prompt cannot run here.
-func resumeSession(current *harnessSession.Session, arg string) (*harnessSession.Session, []string) {
+// resumeSession lists the saved sessions, lets the user pick one, and loads
+// it. It returns the loaded session and any status lines to log; a nil session
+// means the user cancelled or there was nothing to resume.
+func resumeSession(localAgent bool) (*harnessSession.Session, []string) {
 	metas, err := harnessSession.List("", false)
 	if err != nil {
 		return nil, []string{"cannot read saved sessions: " + err.Error()}
@@ -334,96 +373,46 @@ func resumeSession(current *harnessSession.Session, arg string) (*harnessSession
 
 	eligible := make([]harnessSession.Meta, 0, len(metas))
 
-	for _, meta := range metas {
-		if meta.Kind != current.Kind || meta.Provider != current.Provider || meta.UID == current.UID || meta.Directory != current.Directory {
-			continue
-		}
+	switch localAgent {
+	case false:
+		for _, meta := range metas {
+			if meta.LocalOnly {
+				continue
+			}
 
-		eligible = append(eligible, meta)
+			eligible = append(eligible, meta)
+		}
+	case true:
+		for _, meta := range metas {
+			if !meta.LocalOnly {
+				continue
+			}
+
+			eligible = append(eligible, meta)
+		}
 	}
 
 	if len(eligible) == 0 {
-		return nil, []string{"no other saved sessions for this provider, tool mode and directory"}
+		return nil, []string{"no saved sessions for this provider and directory"}
 	}
 
-	if arg == "" {
-		lines := []string{"saved sessions (newest first):"}
-
-		for i, meta := range eligible {
-			line := fmt.Sprintf(
-				"  %d. %s  %s  %d messages  saved %s",
-				i+1, meta.UID, meta.Model, meta.Messages, meta.UpdatedAt.Format("2006-01-02 15:04"),
-			)
-
-			lines = append(lines, line)
-		}
-
-		lines = append(lines, "load one with /resume <number|uid|last>")
-
-		return nil, lines
+	selected, ok := pickSession(eligible)
+	if !ok || selected == "" {
+		return nil, nil
 	}
 
-	pick := func(uid string) (*harnessSession.Session, []string) {
-		next, err := harnessSession.Load(uid)
-		if err != nil {
-			return nil, []string{"cannot load session " + uid + ": " + err.Error()}
-		}
-
-		if err := next.Resumeable(current.Kind); err != nil {
-			return nil, []string{err.Error()}
-		}
-
-		lines := []string{fmt.Sprintf("resumed session %s — %d messages", next.UID, next.Len())}
-		if next.Model != current.Model {
-			lines = append(lines, fmt.Sprintf("model changed from %s to %s", current.Model, next.Model))
-		}
-
-		// Keep the session record aligned with where tools actually run.
-		switch {
-		case next.Directory == "":
-			next.Directory = current.Directory
-		case next.Directory != current.Directory:
-			return nil, []string{fmt.Sprintf(
-				"session %s was started in %s; resume it from that directory",
-				next.UID, next.Directory,
-			)}
-		}
-
-		if harnessSession.OnActiveSession != nil {
-			harnessSession.OnActiveSession(next.UID)
-		}
-
-		return next, lines
+	next, err := harnessSession.Load(selected)
+	if err != nil {
+		return nil, []string{"cannot load session " + selected + ": " + err.Error()}
 	}
 
-	if arg == "last" {
-		return pick(eligible[0].UID)
+	if harnessSession.OnActiveSession != nil {
+		harnessSession.OnActiveSession(next.UID)
 	}
 
-	if n, err := strconv.Atoi(arg); err == nil {
-		if n < 1 || n > len(eligible) {
-			return nil, []string{fmt.Sprintf("no session %d (choose 1-%d, or /resume to list)", n, len(eligible))}
-		}
+	notifyModelChanged(next.Provider, next.Model)
 
-		return pick(eligible[n-1].UID)
-	}
-
-	matches := make([]harnessSession.Meta, 0, 1)
-
-	for _, meta := range eligible {
-		if strings.HasPrefix(meta.UID, arg) {
-			matches = append(matches, meta)
-		}
-	}
-
-	switch len(matches) {
-	case 0:
-		return nil, []string{"no saved session matches " + arg}
-	case 1:
-		return pick(matches[0].UID)
-	default:
-		return nil, []string{fmt.Sprintf("%q matches %d sessions; use more characters", arg, len(matches))}
-	}
+	return next, nil
 }
 
 func selectModel(modelSlice []string, reader *bufio.Reader) (string, error) {

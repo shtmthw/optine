@@ -160,8 +160,8 @@ func readAuth(t *testing.T) dataTypes.AuthConfig {
 	return cfg
 }
 
-// resumeSession returns the loaded session with a replayable transcript so the
-// TUI can show the previous conversation.
+// resumeSession loads the session the picker returns and restores a
+// replayable transcript so the TUI can show the previous conversation.
 func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
 	freshAuth(t)
 
@@ -181,10 +181,11 @@ func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
 		ContextLimit: 4096,
 		MaxTurns:     55,
 		GitStatus:    true,
+		ToolCall:     true,
 	})
 	saved.BeginRun()
 	saved.AppendUser("earlier question")
-	*saved.Ollama() = append(*saved.Ollama(),
+	*saved.OllamaNative() = append(*saved.OllamaNative(),
 		&dataTypes.NativeTooltypeMessage{Role: "assistant", Content: "earlier answer"},
 	)
 
@@ -192,30 +193,48 @@ func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
 		t.Fatalf("commit saved session: %v", err)
 	}
 
-	current := harnessSession.New(harnessSession.Config{
-		Provider:     "Ollama",
-		Model:        "test-model",
-		Directory:    cwd,
-		Kind:         harnessSession.OllamaNative,
-		ContextLimit: 4096,
-		MaxTurns:     55,
-	})
+	oldPick := pickSession
+	pickSession = func(metas []harnessSession.Meta) (string, bool) {
+		if len(metas) != 1 || metas[0].UID != saved.UID {
+			t.Fatalf("picker got unexpected sessions: %+v", metas)
+		}
 
-	next, lines := resumeSession(current, "last")
+		return saved.UID, true
+	}
+	t.Cleanup(func() { pickSession = oldPick })
+
+	var gotProvider, gotModel string
+	oldNotify := notifyModelChanged
+	notifyModelChanged = func(provider, model string) {
+		gotProvider, gotModel = provider, model
+	}
+	t.Cleanup(func() { notifyModelChanged = oldNotify })
+
+	next, lines := resumeSession(false)
 	if next == nil {
 		t.Fatalf("resume returned no session, lines: %v", lines)
+	}
+
+	// The TUI's provider/model line must follow the resumed session, not the
+	// one that was active before the swap.
+	if gotProvider != "Ollama" || gotModel != "test-model" {
+		t.Fatalf("resume did not update the TUI model line: got %q/%q", gotProvider, gotModel)
+	}
+
+	if len(lines) != 0 {
+		t.Fatalf("resume should log nothing on success, got: %v", lines)
 	}
 
 	if !next.GitStatus {
 		t.Fatal("git status lost while resuming")
 	}
 
+	if !next.ToolCall {
+		t.Fatal("tool call lost while resuming")
+	}
+
 	entries := next.Transcript()
 	if len(entries) != 2 || entries[0].Content != "earlier question" || entries[1].Content != "earlier answer" {
 		t.Fatalf("unexpected transcript: %+v", entries)
-	}
-
-	if len(lines) == 0 || !strings.Contains(lines[0], "resumed session") {
-		t.Fatalf("resume status line missing: %v", lines)
 	}
 }

@@ -165,7 +165,7 @@ func PickModel(models []string) (string, bool) {
 		return "", false
 	}
 	result := make(chan string, 1)
-	prog.Send(modelPickerOpenMsg{models: models, result: result})
+	prog.Send(pickerOpenMsg{kind: pickerModel, choices: models, result: result})
 	selected, ok := <-result
 	if !ok || selected == "" {
 		return "", false
@@ -176,4 +176,25 @@ func PickModel(models []string) (string, bool) {
 		}
 	}
 	return selected, false
+}
+
+// PickSession opens the interactive session picker in the active TUI and blocks
+// until the user selects a session or cancels. It returns the selected session
+// UID and whether a selection was made. A cancelled or empty selection returns
+// ("", false).
+func PickSession(sessions []harnessSession.Meta) (string, bool) {
+	if len(sessions) == 0 {
+		return "", false
+	}
+	prog := activeProgram
+	if prog == nil {
+		return "", false
+	}
+	result := make(chan string, 1)
+	prog.Send(pickerOpenMsg{kind: pickerSession, metas: sessions, result: result})
+	selected, ok := <-result
+	if !ok || selected == "" {
+		return "", false
+	}
+	return selected, true
 }
