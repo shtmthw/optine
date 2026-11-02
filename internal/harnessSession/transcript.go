@@ -26,6 +26,7 @@ const (
 	envelopeRetryPrefix = "Your last reply was not a valid tool-call envelope."
 )
 
+// the next fix happens HERE
 // Transcript projects the stored history into user and assistant turns.
 // System prompts, tool traffic, tool-call turns and retry notices are omitted.
 func (s *Session) Transcript() []TranscriptEntry {
