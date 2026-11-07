@@ -2,7 +2,7 @@ package harnessSession
 
 import "testing"
 
-func TestTranscriptKeepsOnlyConversation(t *testing.T) {
+func TestTranscriptKeepsToolTraffic(t *testing.T) {
 	sess := &Session{
 		Kind: OllamaNative,
 		Messages: []Message{
@@ -18,20 +18,65 @@ func TestTranscriptKeepsOnlyConversation(t *testing.T) {
 
 	entries := sess.Transcript()
 
-	if len(entries) != 2 {
-		t.Fatalf("got %d entries, want 2: %+v", len(entries), entries)
+	if len(entries) != 5 {
+		t.Fatalf("got %d entries, want 5: %+v", len(entries), entries)
 	}
 
-	if entries[0].Role != TranscriptUser || entries[0].Content != "hello" {
-		t.Fatalf("first entry wrong: %+v", entries[0])
+	want := []TranscriptEntry{
+		{Role: TranscriptUser, Content: "hello"},
+		{Role: TranscriptAssistant, Content: "checking files"},
+		{Role: TranscriptToolCall, Content: "tool call: bash"},
+		{Role: TranscriptToolResult, Content: "tool result"},
+		{Role: TranscriptAssistant, Content: "answer"},
 	}
 
-	if entries[1].Role != TranscriptAssistant || entries[1].Content != "answer" {
-		t.Fatalf("second entry wrong: %+v", entries[1])
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Fatalf("entry %d = %+v, want %+v", i, entries[i], want[i])
+		}
 	}
 }
 
-func TestEnvelopeTranscriptUnwrapsFinalAnswers(t *testing.T) {
+func TestTranscriptInterleavesMultipleToolResults(t *testing.T) {
+	sess := &Session{
+		Kind: OllamaNative,
+		Messages: []Message{
+			{Role: "user", Content: "run both"},
+			{
+				Role:    "assistant",
+				Content: "running",
+				ToolCalls: []ToolCall{
+					{ID: "a", Name: "bash", Arguments: map[string]any{"command": "ls"}},
+					{ID: "b", Name: "read_file", Arguments: map[string]any{"path": "x"}},
+				},
+			},
+			{Role: "tool", ToolCallID: "a", Content: "one"},
+			{Role: "tool", ToolCallID: "b", Content: "two"},
+		},
+	}
+
+	entries := sess.Transcript()
+
+	want := []TranscriptEntry{
+		{Role: TranscriptUser, Content: "run both"},
+		{Role: TranscriptAssistant, Content: "running"},
+		{Role: TranscriptToolCall, Content: `tool call: bash {"command":"ls"}`},
+		{Role: TranscriptToolResult, Content: "one"},
+		{Role: TranscriptToolCall, Content: `tool call: read_file {"path":"x"}`},
+		{Role: TranscriptToolResult, Content: "two"},
+	}
+
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries, want %d: %+v", len(entries), len(want), entries)
+	}
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Fatalf("entry %d = %+v, want %+v", i, entries[i], want[i])
+		}
+	}
+}
+
+func TestEnvelopeTranscriptUnwrapsToolTraffic(t *testing.T) {
 	sess := &Session{
 		Kind: Envelope,
 		Messages: []Message{
@@ -47,16 +92,85 @@ func TestEnvelopeTranscriptUnwrapsFinalAnswers(t *testing.T) {
 
 	entries := sess.Transcript()
 
+	want := []TranscriptEntry{
+		{Role: TranscriptUser, Content: "hello"},
+		{Role: TranscriptToolCall, Content: `tool call: bash {"command":"ls"}`},
+		{Role: TranscriptToolResult, Content: "file.go"},
+		{Role: TranscriptAssistant, Content: "done"},
+	}
+
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries, want %d: %+v", len(entries), len(want), entries)
+	}
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Fatalf("entry %d = %+v, want %+v", i, entries[i], want[i])
+		}
+	}
+}
+
+func TestEnvelopeTranscriptStripsToolResultFooter(t *testing.T) {
+	sess := &Session{
+		Messages: []Message{
+			{Role: "assistant", Content: `{"type":"tool_call","tool":"bash","arguments":{"command":"ls"}}`},
+			{Role: "user", Content: "TOOL_RESULT\ntool: bash\n\nresult:\nline one\nline two\n\nUse this result to continue solving the user's request. More instructions."},
+		},
+	}
+
+	entries := sess.Transcript()
+
 	if len(entries) != 2 {
 		t.Fatalf("got %d entries, want 2: %+v", len(entries), entries)
 	}
+	if entries[1].Content != "line one\nline two" {
+		t.Fatalf("result = %q", entries[1].Content)
+	}
+}
 
-	if entries[0].Role != TranscriptUser || entries[0].Content != "hello" {
-		t.Fatalf("first entry wrong: %+v", entries[0])
+func TestTranscriptMatchesResultRedactionToTool(t *testing.T) {
+	const fileResult = "EDIT_OK path=/home/me/.ssh/id_rsa dir=/home/me/.ssh file=id_rsa lines=1-1"
+
+	for _, tc := range []struct {
+		tool string
+		want string
+	}{
+		{"edit_file", "edit_file /home/me/.ssh/id_rsa: applied (content hidden: sensitive file)"},
+		{"read_file", fileResult},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			sess := &Session{
+				Messages: []Message{
+					{Role: "assistant", ToolCalls: []ToolCall{
+						{ID: "a", Name: tc.tool, Arguments: map[string]any{"path": "secret"}},
+					}},
+					{Role: "tool", ToolCallID: "a", Content: fileResult},
+				},
+			}
+
+			entries := sess.Transcript()
+
+			if len(entries) != 2 {
+				t.Fatalf("unexpected transcript: %+v", entries)
+			}
+			if entries[1].Content != tc.want {
+				t.Fatalf("result = %q, want %q", entries[1].Content, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnvelopeTranscriptEmptyToolResult(t *testing.T) {
+	sess := &Session{
+		Messages: []Message{
+			{Role: "assistant", Content: `{"type":"tool_call","tool":"bash"}`},
+			{Role: "user", Content: "TOOL_RESULT\ntool: bash\n\nresult:"},
+		},
 	}
 
-	if entries[1].Role != TranscriptAssistant || entries[1].Content != "done" {
-		t.Fatalf("second entry wrong: %+v", entries[1])
+	entries := sess.Transcript()
+
+	if len(entries) != 2 || entries[1].Content != "(no output)" {
+		t.Fatalf("unexpected transcript: %+v", entries)
 	}
 }
 

@@ -55,6 +55,14 @@ func Run(provider string, modelName string, workdir string, resume []Message, ag
 		program.Send(sessionChangedMsg{uid: uid})
 	}
 
+	harnessSession.SetDisplayEventListener(func(event harnessSession.DisplayEvent) {
+		role := string(event.Role)
+		if event.Role == harnessSession.TranscriptAssistant {
+			role = roleAgent
+		}
+		program.Send(transcriptEventMsg{role: role, content: event.Content})
+	})
+
 	// Mirror the old stdout/log behaviour inside the TUI without touching
 	// the harness loop itself.
 	oldOutput := log.Writer()
@@ -68,6 +76,7 @@ func Run(provider string, modelName string, workdir string, resume []Message, ag
 		close(doneCh)
 		approval.Set(nil)
 		harnessSession.OnActiveSession = nil
+		harnessSession.SetDisplayEventListener(nil)
 		if activePickerResult != nil {
 			select {
 			case activePickerResult <- "":

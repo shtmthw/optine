@@ -318,12 +318,15 @@ func renderEditStacked(info *editInfo, width int) string {
 // the terminal size is not known yet: both parts stay unstyled so the content
 // is not padded to a bogus width.
 func renderTitledPanel(title string, rows []string, width int, titleStyle, bodyStyle lipgloss.Style) string {
-	if width <= 0 {
-		return title + "\n" + strings.Join(rows, "\n")
-	}
+	return renderPanel(title, width, titleStyle) + "\n" +
+		renderPanel(strings.Join(rows, "\n"), width, bodyStyle)
+}
 
-	return titleStyle.Width(width).Render(title) + "\n" +
-		bodyStyle.Width(width).Render(strings.Join(rows, "\n"))
+func renderPanel(text string, width int, style lipgloss.Style) string {
+	if width <= 0 {
+		return text
+	}
+	return style.Width(width).Render(text)
 }
 
 // editLineNumberWidth is the gutter width shared by both edit layouts.

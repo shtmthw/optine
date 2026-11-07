@@ -9,8 +9,10 @@ import (
 type TranscriptRole string
 
 const (
-	TranscriptUser      TranscriptRole = "user"
-	TranscriptAssistant TranscriptRole = "assistant"
+	TranscriptUser       TranscriptRole = "user"
+	TranscriptAssistant  TranscriptRole = "assistant"
+	TranscriptToolResult TranscriptRole = "tool"
+	TranscriptToolCall   TranscriptRole = "tool_call"
 )
 
 // TranscriptEntry is one displayable message recovered from a session.
@@ -26,45 +28,128 @@ const (
 	envelopeRetryPrefix = "Your last reply was not a valid tool-call envelope."
 )
 
-// the next fix happens HERE
-// Transcript projects the stored history into user and assistant turns.
-// System prompts, tool traffic, tool-call turns and retry notices are omitted.
+// Transcript projects stored history into user, assistant and tool messages.
 func (s *Session) Transcript() []TranscriptEntry {
 	if s == nil {
 		return nil
 	}
 
 	entries := make([]TranscriptEntry, 0, len(s.Messages))
+	pending := make([]TranscriptEntry, 0, 4)
+	pendingNames := make([]string, 0, 4)
+
+	flushCalls := func() {
+		entries = append(entries, pending...)
+		pending = pending[:0]
+		pendingNames = pendingNames[:0]
+	}
+
+	popPending := func() (TranscriptEntry, string, bool) {
+		if len(pending) == 0 {
+			return TranscriptEntry{}, "", false
+		}
+		entry := pending[0]
+		name := pendingNames[0]
+		pending = pending[1:]
+		pendingNames = pendingNames[1:]
+		return entry, name, true
+	}
 
 	for _, msg := range s.Messages {
-		if len(msg.ToolCalls) > 0 || msg.Role == "tool" || isRetryNotice(msg.Content) {
+		if msg.Role == "user" && isRetryNotice(msg.Content) {
 			continue
 		}
 
-		// The envelope protocol stores tool output as a user turn.
-		if msg.Role == "user" && isToolResult(msg.Content) {
-			continue
-		}
-
-		if msg.Role == "assistant" {
-			switch envelopeType(msg.Content) {
-			case "final_answer":
-				if content, ok := envelopeAnswer(msg.Content); ok {
-					entries = append(entries, TranscriptEntry{Role: TranscriptAssistant, Content: content})
+		if msg.Role == "user" {
+			if tool, result, ok := envelopeToolResult(msg.Content); ok {
+				if entry, _, ok := popPending(); ok {
+					entries = append(entries, entry)
 				}
-				continue
-			case "tool_call":
+				entries = append(entries, TranscriptEntry{
+					Role:    TranscriptToolResult,
+					Content: formatToolResult(tool, result),
+				})
 				continue
 			}
 		}
 
+		if msg.Role == "tool" {
+			name := ""
+			if entry, callName, ok := popPending(); ok {
+				entries = append(entries, entry)
+				name = callName
+			}
+			entries = append(entries, TranscriptEntry{
+				Role:    TranscriptToolResult,
+				Content: formatToolResult(name, msg.Content),
+			})
+			continue
+		}
+
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
+			switch envelopeType(msg.Content) {
+			case "final_answer":
+				flushCalls()
+				content, ok := envelopeAnswer(msg.Content)
+				if ok {
+					entries = append(entries, TranscriptEntry{
+						Role:    TranscriptAssistant,
+						Content: content,
+					})
+				}
+				continue
+
+			case "tool_call":
+				flushCalls()
+				tool, arguments, ok := envelopeToolCall(msg.Content)
+				if !ok {
+					entries = append(entries, TranscriptEntry{
+						Role:    TranscriptToolCall,
+						Content: msg.Content,
+					})
+					continue
+				}
+				pending = append(pending, TranscriptEntry{
+					Role:    TranscriptToolCall,
+					Content: formatToolCall(tool, arguments),
+				})
+				pendingNames = append(pendingNames, tool)
+				continue
+			}
+		}
+
+		if len(msg.ToolCalls) > 0 {
+			flushCalls()
+			if msg.Role == "assistant" && strings.TrimSpace(msg.Content) != "" {
+				entries = append(entries, TranscriptEntry{
+					Role:    TranscriptAssistant,
+					Content: msg.Content,
+				})
+			}
+
+			for _, tool := range msg.ToolCalls {
+				pending = append(pending, TranscriptEntry{
+					Role:    TranscriptToolCall,
+					Content: formatToolCall(tool.Name, tool.Arguments),
+				})
+				pendingNames = append(pendingNames, tool.Name)
+			}
+			continue
+		}
+
+		flushCalls()
 		role, ok := transcriptRole(msg.Role, msg.Content)
 		if !ok {
 			continue
 		}
 
-		entries = append(entries, TranscriptEntry{Role: role, Content: msg.Content})
+		entries = append(entries, TranscriptEntry{
+			Role:    role,
+			Content: msg.Content,
+		})
 	}
+
+	flushCalls()
 
 	return entries
 }
@@ -89,10 +174,6 @@ func isRetryNotice(content string) bool {
 
 	return strings.HasPrefix(content, nativeRetryPrefix) ||
 		strings.HasPrefix(content, envelopeRetryPrefix)
-}
-
-func isToolResult(content string) bool {
-	return strings.HasPrefix(strings.TrimSpace(content), "TOOL_RESULT")
 }
 
 func stripEnvelopeFences(raw string) string {
@@ -126,7 +207,6 @@ func envelopeAnswer(raw string) (string, bool) {
 	if err := json.Unmarshal([]byte(stripEnvelopeFences(raw)), &envelope); err != nil {
 		return "", false
 	}
-
 	if envelope.Type != "final_answer" || strings.TrimSpace(envelope.Content) == "" {
 		return "", false
 	}

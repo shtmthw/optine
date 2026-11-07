@@ -32,10 +32,12 @@ type AgentResult struct {
 
 // Roles a Message can have.
 const (
-	roleUser  = "user"
-	roleAgent = "agent"
-	roleError = "error"
-	roleEvent = "event"
+	roleUser       = "user"
+	roleAgent      = "agent"
+	roleError      = "error"
+	roleEvent      = "event"
+	roleToolResult = "tool"
+	roleToolCall   = "tool_call"
 )
 
 type Message struct {
@@ -145,6 +147,12 @@ type logLineMsg struct {
 	text string
 }
 
+// transcriptEventMsg carries one live assistant or tool message.
+type transcriptEventMsg struct {
+	role    string
+	content string
+}
+
 // approvalRequestedMsg is sent when the harness asks for approval, routed
 // from harnessPermissions.AskFunc through internal/approval.
 type approvalRequestedMsg struct{}
@@ -197,10 +205,15 @@ var (
 			Foreground(lipgloss.Color("#D3D3D3")).
 			Border(lipgloss.HiddenBorder())
 
+	// The user stays bright white so it out-contrasts the colored agent text.
 	userStyle = lipgloss.NewStyle().
-			Bold(true)
+			Bold(true).
+			Foreground(lipgloss.Color("231"))
 
-	agentStyle = lipgloss.NewStyle()
+	agentColor = lipgloss.Color("253")
+
+	agentStyle = lipgloss.NewStyle().
+			Foreground(agentColor)
 
 	errorStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -237,9 +250,11 @@ var (
 // markdown.go, which uses these styles.
 var (
 	headingStyle = lipgloss.NewStyle().
-			Bold(true)
+			Bold(true).
+			Foreground(agentColor)
 
-	agentTextBase = lipgloss.NewStyle()
+	agentTextBase = lipgloss.NewStyle().
+			Foreground(agentColor)
 
 	quoteTextBase = lipgloss.NewStyle().
 			Italic(true).
@@ -366,6 +381,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, Message{
 			Role:    roleEvent,
 			Content: msg.text,
+		})
+		m.cache.invalidate()
+
+	case transcriptEventMsg:
+		m.messages = append(m.messages, Message{
+			Role:    msg.role,
+			Content: msg.content,
 		})
 		m.cache.invalidate()
 
@@ -750,9 +772,21 @@ func (c *renderCache) rebuild(m Model) {
 	b.WriteString(centeredMeta(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
 	b.WriteString("\n\n")
 
-	for _, message := range m.messages {
-		b.WriteString(m.renderMessage(message))
-		b.WriteString("\n\n")
+	// A tool call joins its directly following result into one block.
+	var open *toolCall
+	for i, message := range m.messages {
+		rendered, next, header := m.renderHistoryMessage(message, open)
+		open = next
+		if rendered == "" {
+			continue
+		}
+		b.WriteString(rendered)
+
+		if header && i+1 < len(m.messages) && m.messages[i+1].Role == roleToolResult {
+			b.WriteString("\n")
+		} else {
+			b.WriteString("\n\n")
+		}
 	}
 
 	c.lines = strings.Split(b.String(), "\n")
@@ -773,17 +807,25 @@ func (m Model) renderMessage(message Message) string {
 	case roleError:
 		return renderPlainWrapped("error: "+message.Content, m.width, errorStyle, "", "")
 
-	case roleEvent:
-		if info, ok := parseEditInfo(message.Content); ok {
-			return renderEditInfo(info, m.width)
-		}
-		if info, ok := parseWriteInfo(message.Content); ok {
-			return renderWriteInfo(info, m.width)
-		}
+	case roleEvent, roleToolResult:
+		return m.renderEventContent(message.Content)
+
+	case roleToolCall:
 		return renderPlainWrapped(message.Content, m.width, eventStyle, "", "")
 	}
 
 	return ""
+}
+
+func (m Model) renderEventContent(content string) string {
+	if info, ok := parseEditInfo(content); ok {
+		return renderEditInfo(info, m.width)
+	}
+	if info, ok := parseWriteInfo(content); ok {
+		return renderWriteInfo(info, m.width)
+	}
+
+	return renderPlainWrapped(content, m.width, eventStyle, "", "")
 }
 
 // approvalLines renders the approval prompt and its clickable buttons,

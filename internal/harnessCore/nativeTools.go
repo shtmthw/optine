@@ -132,6 +132,8 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			return reply.Content, nil
 		}
 
+		harnessSession.NotifyAssistant(reply.Content)
+
 		// Append the tool request and all results as one block.
 		results := make([]string, len(reply.ToolCalls))
 
@@ -203,6 +205,8 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			return reply.Content, nil
 		}
 
+		harnessSession.NotifyAssistant(reply.Content)
+
 		// Append the tool request and all results as one block.
 		results := make([]string, len(reply.ToolCalls))
 
@@ -245,8 +249,12 @@ func isNativeTool(name string) bool {
 
 // runTool dispatches a tool call and returns failures as text for the model.
 func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments map[string]any) string {
+	harnessSession.NotifyToolCall(name, arguments)
+
 	if !isNativeTool(name) {
-		return fmt.Sprintf("unknown tool %q requested", name)
+		result := fmt.Sprintf("unknown tool %q requested", name)
+		harnessSession.NotifyToolResult(name, result)
+		return result
 	}
 
 	result, err := harnessDispatch.Dispatch(ctx, reader, &dataTypes.NativeLLMResponse{
@@ -255,8 +263,10 @@ func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments m
 		Arguments: arguments,
 	})
 	if err != nil {
-		return fmt.Sprintf("Tool execution failed: %v", err)
+		result = fmt.Sprintf("Tool execution failed: %v", err)
 	}
+
+	harnessSession.NotifyToolResult(name, result)
 
 	return result
 }

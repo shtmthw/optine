@@ -76,7 +76,6 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			auditFileTool("edit_file", call.Arguments, realPath, filepath.Dir(realPath), "deny", "policy", err.Error())
 			return "", err
 		}
-		logFileToolResult("edit_file", realPath, info)
 		auditFileTool("edit_file", call.Arguments, realPath, filepath.Dir(realPath), "exit_after_execution", "", "")
 		return info, nil
 
@@ -94,7 +93,6 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 			auditFileTool("write_file", call.Arguments, realPath, filepath.Dir(realPath), "deny", "policy", err.Error())
 			return "", err
 		}
-		logFileToolResult("write_file", realPath, info)
 		auditFileTool("write_file", call.Arguments, realPath, filepath.Dir(realPath), "exit_after_execution", "", "")
 		return info, nil
 
@@ -149,15 +147,6 @@ func auditFileTool(tool string, args map[string]any, realPath, dir, decision, by
 	}); err != nil {
 		log.Println("audit unavailable:", err)
 	}
-}
-
-// logFileToolResult logs the tool result, hiding sensitive file contents.
-func logFileToolResult(tool, realPath, info string) {
-	if harnessPermissions.IsSensitive(realPath) {
-		log.Printf("%s %s: applied (content hidden: sensitive file)", tool, realPath)
-		return
-	}
-	log.Println(info)
 }
 
 func dispatchWebSearch(ctx context.Context, call *dataTypes.NativeLLMResponse) (string, error) {

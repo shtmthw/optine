@@ -40,9 +40,6 @@ func ValidateOpenRouterKey(apiKey string) (dataTypes.OpenRouterModel, error) {
 		if err != nil {
 			return dataTypes.OpenRouterModel{}, err
 		}
-		for _, model := range allModels {
-			fmt.Println(model.ID)
-		}
 		AllOpenrouterModels = allModels
 		return allModels[0], nil
 
