@@ -3,12 +3,16 @@ package tui
 import (
 	"bufio"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattthew/optine/internal/harnessSession"
 )
 
 // AgentFunc is the interface between the TUI and the agent.
@@ -38,6 +42,12 @@ const (
 	roleEvent      = "event"
 	roleToolResult = "tool"
 	roleToolCall   = "tool_call"
+	// roleHelp is the /help command list. It is display-only: the agent
+	// never sees it and it is not part of the saved transcript.
+	roleHelp = "help"
+	// roleCommand is the output of a slash command, shown in a grey box. Its
+	// first line is the command, the rest is what the command printed.
+	roleCommand = "command"
 )
 
 type Message struct {
@@ -59,6 +69,16 @@ var approvalChoices = []struct{ label, answer string }{
 }
 
 const (
+	// escWindow is how long the first Esc stays armed; a second Esc inside
+	// it interrupts the running agent loop.
+	escWindow = 3 * time.Second
+
+	escHint          = "press esc again to interrupt"
+	interruptingText = "interrupting... saving session"
+
+	// promptPlaceholder fills the empty prompt with the key hints.
+	promptPlaceholder = "/ for commands · esc twice to interrupt · alt+c copy reply · pgup/pgdn scroll"
+
 	wheelStep   = 3    // lines scrolled per mouse-wheel notch
 	buttonGap   = "  " // spacing between approval buttons
 	cursorGlyph = "█"
@@ -78,6 +98,18 @@ type Model struct {
 	cursor   int // rune index into input
 	messages []Message
 	busy     bool
+
+	// runCancel cancels the context of the agent run in flight; nil when
+	// idle. Each run gets its own context so an interrupt never touches the
+	// program-wide one.
+	runCancel context.CancelFunc
+
+	// Double-Esc interrupt. The first Esc arms it and shows escHint; a
+	// second Esc within escWindow cancels the run. escSeq tells a stale
+	// expiry tick apart from the current arming.
+	escArmed     bool
+	escSeq       int
+	interrupting bool // cancel sent, waiting for the harness to wind down and commit
 
 	// modelLoading shows a yellow loader row while /model loads a model into
 	// memory (Ollama) to read its context length.
@@ -102,6 +134,19 @@ type Model struct {
 	scroll       int // lines scrolled up from the bottom of the history
 
 	picker pickerState
+
+	// palette suggests slash commands while the input starts with "/".
+	palette commandPalette
+
+	// quitRequested is set by /quit so Run can tell the caller to exit
+	// optine instead of returning to the launcher.
+	quitRequested bool
+
+	// commandRun is the slash command in flight, "" during a normal agent
+	// run. Lines it prints are gathered into one roleCommand box, at
+	// commandMsg in messages (-1 until the first line arrives).
+	commandRun string
+	commandMsg int
 }
 
 // clickTargets is written by View and read by Update.
@@ -118,6 +163,11 @@ type clickTargets struct {
 	pickerTotal    int  // number of rows in the current filter
 	pickerBoxLeft  int  // screen column of the picker box's left edge
 	pickerBoxWidth int  // rendered width of the picker box
+
+	paletteVisible  bool // whether command suggestions are on screen
+	paletteFirstRow int  // screen row of the first suggestion
+	paletteStart    int  // index of the first visible suggestion
+	paletteRows     int  // number of visible suggestions
 }
 
 // renderCache holds the width-dependent render of the header and messages.
@@ -134,6 +184,11 @@ func (c *renderCache) invalidate() {
 	if c != nil {
 		c.dirty = true
 	}
+}
+
+// escExpiredMsg disarms the first Esc once escWindow has passed.
+type escExpiredMsg struct {
+	seq int
 }
 
 type agentFinishedMsg struct {
@@ -168,13 +223,14 @@ type sessionChangedMsg struct {
 type modelChangedMsg struct {
 	provider string
 	model    string
+	UID      string
 }
 
 // NotifyModelChanged pushes a provider/model update into the active TUI so its
 // status line stays in sync with a /model selection.
-func NotifyModelChanged(provider, model string) {
+func NotifyModelChanged(provider, model, UID string) {
 	if activeProgram != nil {
-		activeProgram.Send(modelChangedMsg{provider: provider, model: model})
+		activeProgram.Send(modelChangedMsg{provider: provider, model: model, UID: UID})
 	}
 }
 
@@ -199,11 +255,16 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // Styles used by the chat view in this file.
 var (
+	// The header title takes the purple accent; the provider/model/session
+	// and directory beside it take the light grey.
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Italic(true).
-			Foreground(lipgloss.Color("#D3D3D3")).
-			Border(lipgloss.HiddenBorder())
+			Foreground(lipgloss.Color("99"))
+
+	headerInfoStyle = lipgloss.NewStyle().
+			Italic(true).
+			Foreground(lipgloss.Color("#D3D3D3"))
 
 	// The user stays bright white so it out-contrasts the colored agent text.
 	userStyle = lipgloss.NewStyle().
@@ -355,14 +416,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 
 	case agentFinishedMsg:
+		m.commandRun = ""
+		m.commandMsg = -1
 		m.busy = false
 		m.pendingApproval = false
 		m.hovered = ""
+		m.escArmed = false
+		m.interrupting = false
+		if m.runCancel != nil {
+			m.runCancel() // release the run's context
+			m.runCancel = nil
+		}
 
 		if msg.swap != nil {
 			// /resume and /restore replace the old conversation wholesale.
 			m.messages = msg.swap
 			m.scroll = 0
+		} else if errors.Is(msg.err, context.Canceled) {
+			// A user interrupt is not a failure. The harness has already
+			// committed the partial run; show the same marker a resumed
+			// transcript shows for it.
+			m.messages = append(m.messages, Message{
+				Role:    roleEvent,
+				Content: harnessSession.InterruptedNotice,
+			})
 		} else if msg.err != nil {
 			m.messages = append(m.messages, Message{
 				Role:    roleError,
@@ -378,10 +455,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cache.invalidate()
 
 	case logLineMsg:
-		m.messages = append(m.messages, Message{
-			Role:    roleEvent,
-			Content: msg.text,
-		})
+		switch {
+		case m.commandRun != "" && m.commandMsg >= 0 && m.commandMsg < len(m.messages):
+			m.messages[m.commandMsg].Content += "\n" + msg.text
+		case m.commandRun != "":
+			m.commandMsg = len(m.messages)
+			m.messages = append(m.messages, Message{
+				Role:    roleCommand,
+				Content: m.commandRun + "\n" + msg.text,
+			})
+		default:
+			m.messages = append(m.messages, Message{
+				Role:    roleEvent,
+				Content: msg.text,
+			})
+		}
 		m.cache.invalidate()
 
 	case transcriptEventMsg:
@@ -392,6 +480,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cache.invalidate()
 
 	case approvalRequestedMsg:
+		if m.interrupting {
+			// The harness reached a prompt before it saw the cancel; deny
+			// it so the tool never runs and the loop can wind down.
+			return m, sendApproval(m.approvalCh, "n")
+		}
 		m.pendingApproval = true
 		m.hovered = ""
 		m.scroll = 0 // make sure the prompt is on screen
@@ -403,6 +496,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelChangedMsg:
 		m.provider = msg.provider
 		m.modelName = msg.model
+		if msg.UID != "" {
+			m.sessionUID = msg.UID
+		}
 		m.cache.invalidate()
 
 	case modelLoadingMsg:
@@ -413,6 +509,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pickerOpenMsg:
 		m.openPicker(msg)
+
+	case escExpiredMsg:
+		if msg.seq == m.escSeq {
+			m.escArmed = false
+		}
 
 	case tickMsg:
 		if m.busy || m.modelLoading {
@@ -429,10 +530,96 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updatePickerKey(msg)
 	}
 
+	if m.paletteShown() {
+		if next, cmd, handled := m.updatePaletteKey(msg); handled {
+			return next, cmd
+		}
+	}
+
+	before := m.input
+	next, cmd := m.updateInputKey(msg)
+
+	// Any edit to the input reopens the palette at its first suggestion.
+	if nm, ok := next.(Model); ok && nm.input != before {
+		nm.palette.reset()
+		next = nm
+	}
+
+	return next, cmd
+}
+
+// paletteShown reports whether command suggestions are on screen: the input
+// is a lone slash word, nothing else owns the keyboard, and something matches.
+func (m Model) paletteShown() bool {
+	if m.busy || m.pendingApproval || m.picker.active() {
+		return false
+	}
+
+	return len(m.palette.matches(m.input)) > 0
+}
+
+// updatePaletteKey handles the keys the palette owns. Anything else falls
+// through to normal input editing.
+func (m Model) updatePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	n := len(m.palette.matches(m.input))
+
+	switch msg.String() {
+	case "up", "ctrl+p":
+		m.palette.move(-1, n)
+		return m, nil, true
+
+	case "down", "ctrl+n":
+		m.palette.move(1, n)
+		return m, nil, true
+
+	case "tab":
+		if c, ok := m.palette.highlighted(m.input); ok {
+			m.input = c.Name
+			m.cursor = runeLen(m.input)
+			m.palette.reset()
+		}
+		return m, nil, true
+
+	case "enter":
+		if c, ok := m.palette.choice(m.input); ok {
+			m.input = c.Name
+			m.cursor = runeLen(m.input)
+			m.palette.reset()
+		}
+		next, cmd := m.submit()
+		return next, cmd, true
+
+	case "esc":
+		m.palette.hidden = true
+		return m, nil, true
+	}
+
+	return m, nil, false
+}
+
+// runPaletteRow runs the suggestion at index i, as if it was typed.
+func (m Model) runPaletteRow(i int) (tea.Model, tea.Cmd) {
+	matches := m.palette.matches(m.input)
+	if i < 0 || i >= len(matches) {
+		return m, nil
+	}
+
+	m.input = matches[i].Name
+	m.cursor = runeLen(m.input)
+	m.palette.reset()
+
+	return m.submit()
+}
+
+// updateInputKey edits the prompt and handles the global shortcuts.
+func (m Model) updateInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 
 	case "ctrl+c":
 		return m, tea.Quit
+
+	case "esc":
+		return m.pressEsc()
 
 	case "alt+c":
 		if text := lastAgentMessage(m.messages); text != "" {
@@ -497,6 +684,47 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// pressEsc implements the double-Esc interrupt: the first press while a run
+// is in flight arms it and tells the user a second press will interrupt; the
+// second press within escWindow cancels the run.
+func (m Model) pressEsc() (tea.Model, tea.Cmd) {
+	if !m.busy || m.interrupting || m.runCancel == nil {
+		return m, nil
+	}
+
+	if !m.escArmed {
+		m.escArmed = true
+		m.escSeq++
+		m.scroll = 0 // make sure the hint is on screen
+		seq := m.escSeq
+
+		return m, tea.Tick(escWindow, func(time.Time) tea.Msg {
+			return escExpiredMsg{seq: seq}
+		})
+	}
+
+	return m.interrupt()
+}
+
+// interrupt cancels the running agent loop. The harness sees the cancelled
+// context, stops at the next safe point (in-flight HTTP request aborted,
+// running bash process group killed, remaining tool calls skipped), commits
+// the session and returns; agentFinishedMsg then resets the UI.
+func (m Model) interrupt() (tea.Model, tea.Cmd) {
+	m.escArmed = false
+	m.interrupting = true
+	m.runCancel()
+
+	if m.pendingApproval {
+		// The harness is blocked reading the approval answer and cannot see
+		// the cancel until it gets one. Deny: an interrupt must never run a
+		// tool.
+		return m.answerApproval("n")
+	}
+
+	return m, nil
+}
+
 // submit handles Enter: it answers a pending approval, or sends the typed
 // text to the agent as a new chat message.
 func (m Model) submit() (tea.Model, tea.Cmd) {
@@ -520,7 +748,30 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if !strings.HasPrefix(userMessage, "/") {
+	// /quit and /help need nothing from the agent, so the interface answers
+	// them itself instead of starting a run.
+	switch userMessage {
+	case "/quit", "/exit", "/q":
+		m.quitRequested = true
+		return m, tea.Quit
+
+	case "/help", "/h":
+		m.messages = append(m.messages, Message{
+			Role:    roleHelp,
+			Content: helpContent(m.palette.commands),
+		})
+		m.input = ""
+		m.cursor = 0
+		m.scroll = 0
+		m.palette.reset()
+		m.cache.invalidate()
+		return m, nil
+	}
+
+	m.commandRun, m.commandMsg = "", -1
+	if strings.HasPrefix(userMessage, "/") {
+		m.commandRun = strings.Fields(userMessage)[0]
+	} else {
 		m.messages = append(m.messages, Message{
 			Role:    roleUser,
 			Content: userMessage,
@@ -534,9 +785,18 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.spinnerFrame = 0
 	m.scroll = 0 // jump to the bottom so the new message is visible
 
+	parent := m.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	m.runCancel = cancel
+	m.escArmed = false
+	m.interrupting = false
+
 	return m, tea.Batch(
 		runAgent(
-			m.ctx,
+			runCtx,
 			m.agent,
 			m.provider,
 			m.modelName,
@@ -560,6 +820,19 @@ func (m Model) answerApproval(answer string) (tea.Model, tea.Cmd) {
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.picker.active() {
 		return m.updatePickerMouse(msg)
+	}
+
+	if m.paletteShown() {
+		if idx := paletteIndexAt(m.clicks, msg.Y); idx >= 0 {
+			switch {
+			case msg.Action == tea.MouseActionMotion:
+				m.palette.cursor = idx
+				return m, nil
+
+			case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+				return m.runPaletteRow(idx)
+			}
+		}
 	}
 
 	switch {
@@ -621,80 +894,230 @@ func lastAgentMessage(messages []Message) string {
 // View
 // ---------------------------------------------------------------------------
 
-// centeredTitle renders the title centered in the terminal width so it
-// always stays in the middle at any resolution.
-func centeredTitle(width int) string {
-	const text = "You are now running Optine."
+// titleSpaced is the header title, letter-spaced so it reads a size larger
+// in a terminal, where the font size is fixed. It is plain ASCII on purpose:
+// fullwidth letters (Ｏｐｔｉｎｅ) are counted as two cells but some
+// terminals draw them wider, which pushed the directory off the screen.
+// titleSmall is the same word unspaced, for screens too narrow for it.
+const (
+	titleSpaced = "O p t i n e"
+	titleSmall  = "Optine."
+)
 
-	if width <= 0 {
-		return titleStyle.Render(text)
-	}
+const (
+	headerMargin = 2 // cells kept free at each screen edge
+	headerGap    = 4 // minimum cells between neighbouring fields
+)
 
-	if width < 4 {
-		return cutRunes(text, width)
-	}
+// userHome is replaced by ~ in the directory; a variable so tests can pin it.
+var userHome, _ = os.UserHomeDir()
 
-	// The hidden border still occupies a cell on each side, so the
-	// content width is the terminal width minus 2.
-	inner := width - 2
-
-	return titleStyle.Width(inner).Align(lipgloss.Center).Render(cutRunes(text, inner))
-}
-
-// centeredMeta renders the provider/model/session line and the working
-// directory line under the title. The session UID appears after the first run
-// and follows /resume.
-func centeredMeta(width int, providerName, modelName, sessionUID, workdir string) string {
-	lines := make([]string, 0, 2)
-
-	parts := make([]string, 0, 3)
-
-	if providerName != "" {
-		parts = append(parts, providerName)
-	}
-
-	if modelName != "" {
-		parts = append(parts, modelName)
+// headerSides lists the center text (provider, model, session) and the
+// right text (directory) from longest to shortest form.
+func headerSides(providerName, modelName, sessionUID, workdir string) (center, right []string) {
+	meta := func(sess string) string {
+		parts := make([]string, 0, 3)
+		for _, p := range []string{providerName, modelName, sess} {
+			if p != "" {
+				parts = append(parts, p)
+			}
+		}
+		return strings.Join(parts, " · ")
 	}
 
 	if sessionUID != "" {
-		parts = append(parts, "sess "+sessionUID)
+		center = append(center, meta("sess "+sessionUID), meta("sess "+shortSessionUID(sessionUID)))
 	}
-
-	if len(parts) > 0 {
-		lines = append(lines, strings.Join(parts, " · "))
+	center = append(center, meta(""))
+	if modelName != "" && providerName != "" {
+		center = append(center, modelName)
 	}
 
 	if workdir != "" {
-		lines = append(lines, "Directory: "+workdir)
+		right = []string{"Directory: " + workdir, tildePath(workdir), filepath.Base(workdir)}
 	}
 
-	if len(lines) == 0 {
+	return center, right
+}
+
+// headerBar renders the header row at width: the title at the top left,
+// provider, model and session exactly centered, the directory at the top
+// right. The center and the directory take their longest forms that fit;
+// the large title stays until even the shortest forms do not fit, then the
+// small one is used, and past that the center and directory are cut.
+// width <= 0 means unknown.
+func headerBar(width int, providerName, modelName, sessionUID, workdir string) string {
+	center, right := headerSides(providerName, modelName, sessionUID, workdir)
+
+	if width <= 0 {
+		return strings.TrimSpace(titleStyle.Render(titleSpaced) + "  " + headerInfoStyle.Render(first(center)) + "  " + headerInfoStyle.Render(first(right)))
+	}
+
+	for _, title := range []string{titleSpaced, titleSmall} {
+		for _, c := range orEmpty(center) {
+			leftRoom, rightRoom := headerRooms(width, c)
+			if lipgloss.Width(title) > leftRoom {
+				continue
+			}
+			if r, ok := longestFitting(right, rightRoom); ok {
+				return layoutHeader(width, title, c, r)
+			}
+		}
+	}
+
+	// Nothing fits whole: small title at the left, the center cut so it keeps
+	// the same clearance on both sides, and the directory cut to what is left.
+	titleWidth := lipgloss.Width(titleSmall)
+	if titleWidth+headerMargin > width {
+		return titleStyle.Render(cutRunes(titleSmall, width))
+	}
+
+	c := fitHeaderLeft(last(center), width-2*(headerMargin+titleWidth+headerGap))
+	_, rightRoom := headerRooms(width, c)
+	if c == "" {
+		rightRoom = width - headerMargin - titleWidth - headerGap - headerMargin
+	}
+
+	r, ok := longestFitting(right, rightRoom)
+	if !ok {
+		r = fitHeaderRight(last(right), rightRoom)
+	}
+
+	return layoutHeader(width, titleSmall, c, r)
+}
+
+// headerRooms is the space left and right of a centered text.
+func headerRooms(width int, center string) (leftRoom, rightRoom int) {
+	centerWidth := lipgloss.Width(center)
+	start := (width - centerWidth) / 2
+
+	return start - headerMargin - headerGap, width - start - centerWidth - headerGap - headerMargin
+}
+
+// orEmpty lets a header with no center text still be laid out once.
+func orEmpty(forms []string) []string {
+	if len(forms) == 0 {
+		return []string{""}
+	}
+
+	return forms
+}
+
+// longestFitting returns the first form that fits room. An empty list fits
+// anywhere, as nothing.
+func longestFitting(forms []string, room int) (string, bool) {
+	if len(forms) == 0 {
+		return "", true
+	}
+
+	for _, f := range forms {
+		if lipgloss.Width(f) <= room {
+			return f, true
+		}
+	}
+
+	return "", false
+}
+
+// layoutHeader places the title at the left edge, the center text centered
+// on the screen and the directory at the right edge.
+func layoutHeader(width int, title, center, right string) string {
+	var b strings.Builder
+
+	b.WriteString(strings.Repeat(" ", headerMargin) + titleStyle.Render(title))
+	used := headerMargin + lipgloss.Width(title)
+
+	if center != "" {
+		centerWidth := lipgloss.Width(center)
+		start := (width - centerWidth) / 2
+		b.WriteString(strings.Repeat(" ", max(0, start-used)) + headerInfoStyle.Render(center))
+		used = max(used, start) + centerWidth
+	}
+
+	if right != "" {
+		pad := width - headerMargin - lipgloss.Width(right) - used
+		b.WriteString(strings.Repeat(" ", max(0, pad)) + headerInfoStyle.Render(right))
+	}
+
+	return b.String()
+}
+
+func first(forms []string) string {
+	if len(forms) == 0 {
 		return ""
 	}
 
-	rendered := make([]string, 0, len(lines))
-
-	for _, line := range lines {
-		rendered = append(rendered, centeredStatus(width, line))
-	}
-
-	return strings.Join(rendered, "\n")
+	return forms[0]
 }
 
-// centeredStatus centers one faint status line within the terminal width.
-func centeredStatus(width int, text string) string {
-	if width <= 0 {
-		return statusStyle.Render(text)
+func last(forms []string) string {
+	if len(forms) == 0 {
+		return ""
 	}
 
-	if width < 4 {
-		return statusStyle.Render(cutRunes(text, width))
+	return forms[len(forms)-1]
+}
+
+// minHeaderSide is the narrowest room worth showing a cut side in.
+const minHeaderSide = 4
+
+// fitHeaderLeft cuts the left side's end to room cells.
+func fitHeaderLeft(text string, room int) string {
+	if lipgloss.Width(text) <= room {
+		return text
+	}
+	if room < minHeaderSide {
+		return ""
 	}
 
-	inner := width - 2
+	runes := []rune(text)
+	for len(runes) > 0 && lipgloss.Width(string(runes))+1 > room {
+		runes = runes[:len(runes)-1]
+	}
 
-	return statusStyle.Width(inner).Align(lipgloss.Center).Render(cutRunes(text, inner))
+	return string(runes) + "…"
+}
+
+// fitHeaderRight keeps the end of the directory, which names the project.
+func fitHeaderRight(text string, room int) string {
+	if lipgloss.Width(text) <= room {
+		return text
+	}
+	if room < minHeaderSide {
+		return ""
+	}
+
+	runes := []rune(text)
+	for len(runes) > 0 && lipgloss.Width(string(runes))+1 > room {
+		runes = runes[1:]
+	}
+
+	return "…" + string(runes)
+}
+
+// shortSessionUID keeps the random suffix of a session UID, which is what
+// tells sessions started on the same day apart.
+func shortSessionUID(uid string) string {
+	if i := strings.LastIndex(uid, "-"); i >= 0 && i < len(uid)-1 {
+		return uid[i+1:]
+	}
+
+	return uid
+}
+
+// tildePath writes a path under the home directory as ~/...
+func tildePath(p string) string {
+	if userHome == "" {
+		return p
+	}
+	if p == userHome {
+		return "~"
+	}
+	if rest, ok := strings.CutPrefix(p, userHome+string(filepath.Separator)); ok {
+		return "~/" + rest
+	}
+
+	return p
 }
 
 func (m Model) View() string {
@@ -702,16 +1125,27 @@ func (m Model) View() string {
 		return m.pickerView()
 	}
 
+	palette := m.paletteLines()
+
 	lines, optionsRow := m.historyLines()
-	visible := m.visibleLines(lines, optionsRow)
+	visible := m.visibleLines(lines, optionsRow, len(palette))
 
 	var out strings.Builder
 	out.WriteString(strings.Join(visible, "\n"))
 
 	// Lock the prompt to the bottom-left: pad with blank rows so it lands
-	// on the last screen row at any resolution.
-	if pad := m.height - 1 - len(visible); pad > 0 {
+	// on the last screen row at any resolution, with the command
+	// suggestions (if any) directly above it.
+	pad := m.height - 1 - len(palette) - len(visible)
+	if pad > 0 {
 		out.WriteString(strings.Repeat("\n", pad))
+	}
+
+	if len(palette) > 0 {
+		m.clicks.paletteFirstRow = len(visible) + max(pad, 0)
+		for _, line := range palette {
+			out.WriteString("\n" + line)
+		}
 	}
 
 	out.WriteString("\n" + m.renderPrompt())
@@ -746,7 +1180,16 @@ func (m Model) historyLines() ([]string, int) {
 		spinner := loadingStyle.Render(spinnerFrames[m.spinnerFrame] + " loading " + m.loadingModel + "...")
 		lines = append(lines[:len(lines):len(lines)], spinner, "")
 	} else if m.busy {
-		spinner := statusStyle.Render(spinnerFrames[m.spinnerFrame] + " thinking...")
+		var spinner string
+		switch {
+		case m.interrupting:
+			spinner = loadingStyle.Render(spinnerFrames[m.spinnerFrame] + " " + interruptingText)
+		case m.escArmed:
+			spinner = statusStyle.Render(spinnerFrames[m.spinnerFrame]+" thinking...") +
+				"  " + loadingStyle.Render(escHint)
+		default:
+			spinner = statusStyle.Render(spinnerFrames[m.spinnerFrame] + " thinking...")
+		}
 		lines = append(lines[:len(lines):len(lines)], spinner, "")
 	}
 
@@ -766,11 +1209,10 @@ func (m Model) historyLines() ([]string, int) {
 func (c *renderCache) rebuild(m Model) {
 	var b strings.Builder
 
-	b.WriteString("\n")
-	b.WriteString(centeredTitle(m.width))
-	b.WriteString("\n")
-	b.WriteString(centeredMeta(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
+	// Two blank rows of padding above the header bar and two below it.
 	b.WriteString("\n\n")
+	b.WriteString(headerBar(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
+	b.WriteString("\n\n\n")
 
 	// A tool call joins its directly following result into one block.
 	var open *toolCall
@@ -812,9 +1254,56 @@ func (m Model) renderMessage(message Message) string {
 
 	case roleToolCall:
 		return renderPlainWrapped(message.Content, m.width, eventStyle, "", "")
+
+	case roleHelp:
+		return renderHelp(message.Content, m.width)
+
+	case roleCommand:
+		title, body, _ := strings.Cut(message.Content, "\n")
+		return renderCommandBox(title, strings.Split(body, "\n"), m.width)
 	}
 
 	return ""
+}
+
+// paletteLines renders the command suggestions shown above the prompt and
+// records where they are for mouse hit-testing. Short terminals keep at
+// least one history row and the prompt visible.
+func (m Model) paletteLines() []string {
+	c := m.clicks
+	if c != nil {
+		c.paletteVisible = false
+	}
+
+	if !m.paletteShown() || m.height < 4 {
+		return nil
+	}
+
+	// prompt row + hint row + one history row stay free.
+	maxRows := m.height - 3
+	lines := m.palette.render(m.input, m.width, maxRows)
+
+	if c != nil && len(lines) > 0 {
+		_, start, rows := m.palette.window(m.input, maxRows)
+		c.paletteVisible = true
+		c.paletteStart = start
+		c.paletteRows = rows
+	}
+
+	return lines
+}
+
+// paletteIndexAt maps a screen row to a suggestion index, or -1 if none.
+func paletteIndexAt(c *clickTargets, y int) int {
+	if c == nil || !c.paletteVisible {
+		return -1
+	}
+
+	if y < c.paletteFirstRow || y >= c.paletteFirstRow+c.paletteRows {
+		return -1
+	}
+
+	return c.paletteStart + (y - c.paletteFirstRow)
 }
 
 func (m Model) renderEventContent(content string) string {
@@ -867,11 +1356,12 @@ func (m Model) approvalLines() ([]string, []approvalOption) {
 }
 
 // visibleLines picks the part of the history to show: the newest (height-1)
-// lines, shifted up by the scroll offset; the prompt is pinned below them.
+// lines, shifted up by the scroll offset; the prompt (and reserved rows of
+// command suggestions) are pinned below them.
 // It also records the scroll limit and whether the approval buttons (on
 // optionsRow, or -1) are on screen, for the next Update.
-func (m Model) visibleLines(lines []string, optionsRow int) []string {
-	contentHeight := m.height - 1
+func (m Model) visibleLines(lines []string, optionsRow int, reserved int) []string {
+	contentHeight := m.height - 1 - reserved
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -897,8 +1387,14 @@ func (m Model) visibleLines(lines []string, optionsRow int) []string {
 }
 
 // renderPrompt draws the single-row "> input" prompt. The input is windowed
-// around the cursor so "> " always starts at column 0.
+// around the cursor so "> " always starts at column 0. An empty prompt shows
+// the key hints as a faint placeholder, except while an approval is pending,
+// when the prompt takes the y/a/n answer.
 func (m Model) renderPrompt() string {
+	if m.input == "" && !m.pendingApproval {
+		return renderPlaceholderPrompt(m.width)
+	}
+
 	runes := []rune(m.input)
 	cursor := clampInt(m.cursor, 0, len(runes))
 
@@ -926,6 +1422,22 @@ func (m Model) renderPrompt() string {
 	}
 
 	return prompt
+}
+
+// renderPlaceholderPrompt draws "> " and the cursor followed by the faint
+// placeholder, cut to fit the row.
+func renderPlaceholderPrompt(width int) string {
+	prompt := "> " + cursorGlyph
+	if width <= 0 {
+		return prompt + hintStyle.Render(promptPlaceholder)
+	}
+
+	room := width - runeLen(prompt)
+	if room <= 0 {
+		return cutRunes(prompt, width)
+	}
+
+	return prompt + hintStyle.Render(truncateRunes(promptPlaceholder, room))
 }
 
 func runAgent(

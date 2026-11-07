@@ -3,6 +3,7 @@ package harnessTools
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,7 @@ var (
 
 // BashToolCall runs one bash tool call. The workspace root is resolved once
 // from the starting directory; the model cannot change it.
-func BashToolCall(raw json.RawMessage, reader *bufio.Reader) harnessPermissions.BashOutcome {
+func BashToolCall(ctx context.Context, raw json.RawMessage, reader *bufio.Reader) harnessPermissions.BashOutcome {
 	BashMu.Lock()
 	defer BashMu.Unlock()
 
@@ -37,10 +38,10 @@ func BashToolCall(raw json.RawMessage, reader *bufio.Reader) harnessPermissions.
 	if SessionErr != nil {
 		return harnessPermissions.BashOutcome{Text: "bash is unavailable: " + SessionErr.Error()}
 	}
-	return bashTool(TheSession, raw, reader)
+	return bashTool(ctx, TheSession, raw, reader)
 }
 
-func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bufio.Reader) harnessPermissions.BashOutcome {
+func bashTool(ctx context.Context, s *harnessPermissions.BashSession, raw json.RawMessage, reader *bufio.Reader) harnessPermissions.BashOutcome {
 	args, err := decodeBashArgs(raw)
 	if err != nil {
 		return harnessPermissions.BashOutcome{Text: fmt.Sprintf(
@@ -85,6 +86,13 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 		}
 	}
 
+	// An interrupt can land while the approval prompt is up; never start a
+	// command after the user has asked the run to stop.
+	if ctx.Err() != nil {
+		harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "deny", By: "user", Reason: "interrupted by user"})
+		return harnessPermissions.BashOutcome{Text: "not run: interrupted by user"}
+	}
+
 	// Log before running; if the audit write fails, do not run.
 	rec := harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Actions: actions, Decision: "allow", By: by, Reason: why}
 	if err := harnessPermissions.WriteAudit(s.AuditPath, rec); err != nil {
@@ -96,7 +104,7 @@ func bashTool(s *harnessPermissions.BashSession, raw json.RawMessage, reader *bu
 	if args.TimeoutMs > 0 {
 		timeout = min(time.Duration(args.TimeoutMs)*time.Millisecond, harnessPermissions.MaxTimeout)
 	}
-	text, code := harnessPermissions.ExecBash(args.Command, s.Root, timeout)
+	text, code := harnessPermissions.ExecBashContext(ctx, args.Command, s.Root, timeout)
 
 	harnessPermissions.WriteAudit(s.AuditPath, harnessPermissions.AuditRecord{Command: args.Command, Dir: s.Root, Decision: "exit_after_execution", ExitCode: &code})
 	return harnessPermissions.BashOutcome{Text: text}

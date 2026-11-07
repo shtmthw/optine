@@ -18,7 +18,7 @@ const (
 	MaxOutput      = 64 * 1024
 	MaxCommandLen  = 8 * 1024
 	DefaultTimeout = 30 * time.Second
-	MaxTimeout     = 120 * time.Second
+	MaxTimeout     = 60 * time.Minute
 )
 
 type Decision int
@@ -246,7 +246,13 @@ func WriteAudit(path string, rec AuditRecord) error {
 // execBash runs the command with bash -c (the same dialect the classifier
 // parsed), with a scrubbed env, no stdin, a timeout, and capped output.
 func ExecBash(command, dir string, timeout time.Duration) (string, int) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ExecBashContext(context.Background(), command, dir, timeout)
+}
+
+// ExecBashContext is ExecBash bound to parent: cancelling parent (a user
+// interrupt) kills the whole process group, the same way the timeout does.
+func ExecBashContext(parentCtx context.Context, command, dir string, timeout time.Duration) (string, int) {
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
@@ -293,7 +299,10 @@ func ExecBash(command, dir string, timeout time.Duration) (string, int) {
 	if truncated {
 		text += fmt.Sprintf("\n[output truncated at %d bytes, command killed]", MaxOutput)
 	}
-	if ctx.Err() == context.DeadlineExceeded {
+	switch {
+	case parentCtx.Err() != nil:
+		text += "\n[interrupted by user, command killed]"
+	case ctx.Err() == context.DeadlineExceeded:
 		text += fmt.Sprintf("\n[timed out after %s]", timeout)
 	}
 	return fmt.Sprintf("%s\n[exit code %d]", text, code), code

@@ -13,6 +13,7 @@ const (
 	TranscriptAssistant  TranscriptRole = "assistant"
 	TranscriptToolResult TranscriptRole = "tool"
 	TranscriptToolCall   TranscriptRole = "tool_call"
+	TranscriptEvent      TranscriptRole = "event"
 )
 
 // TranscriptEntry is one displayable message recovered from a session.
@@ -57,6 +58,12 @@ func (s *Session) Transcript() []TranscriptEntry {
 
 	for _, msg := range s.Messages {
 		if msg.Role == "user" && isRetryNotice(msg.Content) {
+			continue
+		}
+
+		if msg.Role == "user" && strings.TrimSpace(msg.Content) == InterruptedNotice {
+			flushCalls()
+			entries = append(entries, TranscriptEntry{Role: TranscriptEvent, Content: InterruptedNotice})
 			continue
 		}
 

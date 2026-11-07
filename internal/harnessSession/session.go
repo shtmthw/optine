@@ -154,6 +154,15 @@ func (s *Session) AppendUser(content string) {
 	s.Messages = append(s.Messages, Message{Role: "user", Content: content})
 }
 
+// InterruptedNotice marks a run the user stopped.
+const InterruptedNotice = "[Request interrupted by user]"
+
+// AppendInterrupted records that the user interrupted the current run. It is
+// not a user message, so TotalUserMessages (and snapshot numbering) is kept.
+func (s *Session) AppendInterrupted() {
+	s.Messages = append(s.Messages, Message{Role: "user", Content: InterruptedNotice})
+}
+
 // RecordPromptTokens stores the provider's measured prompt size. Zero keeps
 // the last known value.
 func (s *Session) RecordPromptTokens(n int) {

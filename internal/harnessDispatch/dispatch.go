@@ -17,6 +17,10 @@ import (
 
 var ErrToolCallRejection = errors.New("the tool call request has been rejected")
 
+// ErrInterrupted is returned when the user interrupted the run while this
+// tool call was waiting on its approval prompt; the tool is not executed.
+var ErrInterrupted = errors.New("not run: interrupted by user")
+
 // allowList remembers tools approved with "always" for this session.
 var allowList = make(map[string]struct{})
 
@@ -48,14 +52,12 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		// Validate the range before prompting.
 		startLine, endLine, err := harnessTools.ReadFileArgs(call.Arguments)
 		if err != nil {
-			log.Println(err)
 			return "", err
 		}
 
 		realPath, err := harnessPermissions.ReadFilePolicy(call.Arguments, reader)
 
 		if err != nil {
-			log.Println(err)
 			return "", err
 		}
 		return harnessTools.ReadFile(realPath, startLine, endLine)
@@ -66,9 +68,12 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		doAppend := harnessPermissions.EditAppendFlag(call.Arguments)
 		realPath, oldString, newString, err := harnessPermissions.EditFilePolicy(call.Arguments, reader, doAppend)
 		if err != nil {
-			log.Println(err)
 			auditFileTool("edit_file", call.Arguments, "", "", "deny", fileDenyBy(err), err.Error())
 			return "", err
+		}
+		if ctx.Err() != nil {
+			auditFileTool("edit_file", call.Arguments, realPath, filepath.Dir(realPath), "deny", "user", ErrInterrupted.Error())
+			return "", ErrInterrupted
 		}
 		info, err := harnessTools.EditFile(realPath, oldString, newString, doAppend)
 		if err != nil {
@@ -83,9 +88,12 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		// Policy resolves and approves a create-only target.
 		realPath, content, err := harnessPermissions.WriteFilePolicy(call.Arguments, reader)
 		if err != nil {
-			log.Println(err)
 			auditFileTool("write_file", call.Arguments, "", "", "deny", fileDenyBy(err), err.Error())
 			return "", err
+		}
+		if ctx.Err() != nil {
+			auditFileTool("write_file", call.Arguments, realPath, filepath.Dir(realPath), "deny", "user", ErrInterrupted.Error())
+			return "", ErrInterrupted
 		}
 		info, err := harnessTools.WriteFile(realPath, content)
 		if err != nil {
@@ -103,7 +111,7 @@ func Dispatch(ctx context.Context, reader *bufio.Reader, call *dataTypes.NativeL
 		if err != nil {
 			return "", fmt.Errorf("bash: encoding arguments: %w", err)
 		}
-		outcome := harnessTools.BashToolCall(raw, reader)
+		outcome := harnessTools.BashToolCall(ctx, raw, reader)
 		return outcome.Text, nil
 
 	default:

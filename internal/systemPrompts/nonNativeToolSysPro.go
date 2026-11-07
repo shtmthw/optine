@@ -136,7 +136,7 @@ Rules:
    edit_file and write_file reject texts over 256KB; split large changes.
    bash takes a required "arguments.command" string,
    plus an optional "arguments.description" string and an optional
-   "arguments.timeout_ms" integer (default 30000, maximum 120000).
+   "arguments.timeout_ms" integer (default 30000, maximum 3600000 = 60 minutes; set it for installs, builds and downloads, and run servers or watch modes in the background instead).
 5. Tool results arrive as TOOL_RESULT text. Use them to carry on.
 6. If a result is not enough, ask for another tool. Once you have enough,
    return a final_answer.

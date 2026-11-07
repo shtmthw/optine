@@ -7,8 +7,11 @@ keeping every mutating action behind your approval.
 
 ## What optine does
 
-Type /local and pick a running provider, or /remote to start on a hosted
-OpenRouter model. optine probes your models, checks whether they support tool
+optine opens on a launcher: the optine banner and the commands that start a
+session. Type / to pick one from an interactive list, or type it out. /local
+starts on a running local provider and /remote on a hosted OpenRouter model;
+providers, models and connections are chosen from arrow-key lists, and API keys
+are typed without being echoed. optine probes your models, checks whether they support tool
 calling, and drops you into a terminal interface where the model can search the
 web, read files, edit files, create files and run bash commands. Models with
 native tool calling use it directly. Models without it fall back to a JSON
@@ -27,7 +30,7 @@ restart, and /revert restores the files from the latest run.
 5. A JSONL audit log recorded before any action executes
 6. Long term casual memory the model keeps in a plain file you can watch
 7. In-session /model switching: optine re-probes the chosen model's tool support and context window and rewrites the session's system prompt for the matching protocol
-8. A terminal interface with clickable approval prompts, interactive model and session pickers, markdown output, copy shortcuts and cached conversation rendering
+8. A terminal interface with a / command palette (filtered as you type, arrow keys, tab to complete, clickable) that offers only the commands of the current session, local or remote, plus clickable approval prompts, interactive model and session pickers, markdown output, copy shortcuts and cached conversation rendering
 9. Sessional memory: conversation history, the tool-call mode and the composed system prompt are saved under your user config directory and reloaded with /resume, including the snapshot backend chosen when the session started, and replayed in the TUI
 10. Before/after file snapshots for every run and /revert to restore changed or deleted files from the latest run and remove files it created
 
@@ -47,9 +50,14 @@ go build ./...
 ```
 
 Type /local to start on a local model, or /remote to start on a hosted
-OpenRouter model (set a key with /connect first). Inside the interface, /model
-switches models, /resume reopens a saved session, /revert restores files from
-the latest run, and /quit exits. /help lists every command.
+OpenRouter model (set a key with /connect first). Typing / at the launcher or
+inside a session lists the commands available there. Inside the interface,
+/model switches models, /new starts an empty session, /resume reopens a saved
+session, /revert restores files from the latest run, /redo puts that run's
+changes back after a /revert, and /quit exits optine;
+ctrl+c leaves the session and returns to the launcher. /help lists every
+command. Without a terminal (piped input), the launcher falls back to plain
+lines and numbered lists.
 
 ## Sessions
 
@@ -91,7 +99,8 @@ the session's saved snapshot backend. /revert uses the latest complete pair to
 put changed or deleted files back and remove files created by that run.
 Snapshots belong to the session, so this works after /resume as long as you
 are in the same directory. /revert only touches files; it does not remove
-messages from the transcript.
+messages from the transcript. /redo undoes a /revert, putting the latest
+run's changes back.
 
 If the latest run has only a before snapshot or no snapshots at all, /revert
 leaves the working directory alone and reports that there is no complete pair
@@ -140,8 +149,9 @@ casualMemory.md, sessions/ and the snapshot stores on Linux.
 9. internal/approval, the "a human answer is needed" bridge between the harness and the active interface
 10. internal/provider, server probing and capability checks
 11. internal/dataTypes, the shared provider request, response and message types
-12. internal/cli, the provider, model and session pickers
-13. internal/tui, the terminal interface
+12. internal/cli, the launcher, the provider, model and session pickers
+13. internal/tui, the terminal interface, the launcher widgets and the command palette
+14. internal/slashCommands, the one list of slash commands per scope (launcher, local session, remote session)
 
 ## Status
 

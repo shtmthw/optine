@@ -14,6 +14,9 @@ import (
 	"github.com/mattthew/optine/internal/harnessSnapshotter"
 )
 
+// ErrInterrupted is returned by AgentLoop when the user stopped the run.
+var ErrInterrupted = fmt.Errorf("run interrupted by user: %w", context.Canceled)
+
 // AgentLoop runs one user message against the session's history.
 func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader) (string, error) {
 
@@ -66,8 +69,18 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 		result, err = nonNativeAgentCall(ctx, sess, reader, agentConfig.Provider, agentConfig.Model)
 	}
 
-	if commitErr := harnessSession.Commit(sess); commitErr != nil {
+	interrupted := errors.Is(err, context.Canceled) || (err != nil && ctx.Err() != nil)
+	if interrupted {
+		// History already holds every completed turn (tool blocks are appended whole, with a result for every call).
+		// Mark the cut so the model knows on the next message that this run did not finish.
+		sess.AppendInterrupted()
+	}
+
+	commitErr := harnessSession.Commit(sess)
+	if commitErr != nil {
 		log.Printf("session %s: could not save history: %v", sess.UID, commitErr)
+	} else if interrupted {
+		log.Printf("session %s: interrupted run saved (%d messages)", sess.UID, sess.Len())
 	}
 	// takes another snapshot right after the agent is finished processing users request
 
@@ -86,10 +99,11 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 		}
 	}
 
+	if interrupted {
+		return "", ErrInterrupted
+	}
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			return "", err
-		}
+		return "", err
 	}
 	return result, nil
 }

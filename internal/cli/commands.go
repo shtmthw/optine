@@ -2,23 +2,26 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/mattthew/optine/internal/harnessSession"
+	"github.com/mattthew/optine/internal/tui"
 )
 
 // RunCommand handles one slash command. It reports whether the caller should
 // exit: true on /quit or on EOF, false otherwise. Anything that is not a
 // slash command or an unknown command keeps the caller in its loop.
+//
+// externalInput means the command was typed inside the agent interface and
+// is passed in explicitInput; otherwise one line is read from reader.
 func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) bool {
-	var command string
+	command := explicitInput
 
-	if externalInput {
-		command = explicitInput
-	} else {
+	if !externalInput {
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			if err != io.EOF {
@@ -30,104 +33,105 @@ func RunCommand(explicitInput string, externalInput bool, reader *bufio.Reader) 
 		command = input
 	}
 
-	command = strings.TrimSpace(command)
+	return dispatch(command, externalInput, reader)
+}
 
+// dispatch runs one command line. inSession is true when it was typed inside
+// the agent interface, where commands that start a new session are refused
+// and output goes to the interface instead of the terminal.
+func dispatch(command string, inSession bool, reader *bufio.Reader) bool {
+	out := printer{inSession: inSession}
+
+	command = strings.TrimSpace(command)
 	if command == "" {
 		return false
 	}
 
 	if !strings.HasPrefix(command, "/") {
-		log.Println("Not a command that optine supports, type /help for the list")
+		out.warn("%q is not a command; type / to pick one or /help to list them", command)
 		return false
 	}
-	switch command {
-	case "/local":
-		if externalInput {
-			log.Println("not allowed to run /local while in the agent interface")
-			return false
-		}
-		log.Println("starting /local execution")
-		if err := selectProvider(reader); err != nil {
-			log.Println("RunCommand error: ", err)
-		}
-		return false
 
-	case "/connect":
-		if externalInput {
-			log.Println("not allowed to run /connect while in the agent interface")
+	switch command {
+	case "/local", "/remote", "/connect":
+		if inSession {
+			out.warn("%s is a launcher command: press ctrl+c to leave this session and return to the launcher", command)
 			return false
 		}
-		log.Println("starting /connect execution")
-		if err := selectConnection(reader); err != nil {
-			log.Println("RunCommand error: ", err)
+
+		var err error
+		switch command {
+		case "/local":
+			err = selectProvider(reader)
+		case "/remote":
+			err = filterModelProviderAvailability(reader)
+		case "/connect":
+			err = selectConnection(reader)
 		}
-		return false
+
+		return sessionEnded(out, err)
 
 	case "/help", "/h":
-		log.Println("available commands: /local (pick your local provider and start), /resume (pick session and resume work), /remote (pick your remote provider and start), /connect (connect to supported api providers), /funfact, /help, /quit")
+		out.help()
 		return false
 
 	case "/quit", "/exit", "/q":
 		return true
 
 	case "/funfact":
-		log.Println("this is an one man built agent, and that man is Matthew Baroi")
+		out.info("optine is a one-person project, built by Matthew Baroi")
 		return false
 
-	case "/remote":
-		if externalInput {
-			log.Println("not allowed to run /remote while in the agent interface")
-			return false
-		}
-		log.Println("starting /remote execution")
-
-		//check the api keys availability based on the keys that match the supported providers name in auth.json in the config dir
-		err := filterModelProviderAvailability(reader)
-
-		if err != nil {
-			log.Printf("error: %v", err)
-			return false
-		}
-
-		log.Println("Successfully validated, and ready to make a connection.")
-		return false
 	case "/resume":
-		cwd, err := os.Getwd()
-		if err != nil {
-			log.Printf("error occurred while trying to get the CWD of user, err: %v", err)
-			return false
-		}
-		availableSess, listErr := harnessSession.List(cwd, true)
-
-		if listErr != nil {
-			log.Printf("error occurred while listing the available sessions, err: %v", listErr)
-			return false
-		}
-
-		if len(availableSess) == 0 {
-			log.Println("No sessions related this directory, please run /local or /remote to start a new session")
-			return false
-		}
-
-		providerErr := checkProviderAvailability(availableSess[0].Provider, availableSess[0].Model)
-
-		if providerErr != nil {
-			log.Printf("Error: %v", providerErr)
-			return false
-		}
-		isNativeToolSupportive := availableSess[0].ToolCall
-
-		log.Println("Resuming the last session related to this directory...")
-
-		if err := RunAgentSession(availableSess[0].Provider, availableSess[0].Model, isNativeToolSupportive, availableSess[0].ContextLimit, availableSess[0].UID, true, false); err != nil {
-			log.Printf("error occurred while trying to initiate the agent, err: %v", err)
-			return false
-		}
-
-		return false
+		return sessionEnded(out, resumeLatest(out))
 
 	default:
-		log.Println("unknown command, type /help for the list")
+		out.warn("unknown command %s; type / to pick one or /help to list them", command)
 		return false
 	}
+}
+
+// sessionEnded reports whether err means optine should exit (the user typed
+// /quit inside the agent interface) and prints any other error once.
+func sessionEnded(out printer, err error) bool {
+	switch {
+	case err == nil, errors.Is(err, errCancelled):
+		return false
+
+	case errors.Is(err, tui.ErrQuit):
+		return true
+	}
+
+	out.fail("%v", err)
+	return false
+}
+
+// resumeLatest resumes the newest session saved for the working directory.
+// Inside the agent interface /resume opens a picker instead; this is the
+// launcher's version.
+func resumeLatest(out printer) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return errors.New("cannot read the working directory: " + err.Error())
+	}
+
+	sessions, err := harnessSession.List(cwd, true)
+	if err != nil {
+		return errors.New("cannot list saved sessions: " + err.Error())
+	}
+
+	if len(sessions) == 0 {
+		out.warn("no saved sessions for %s; start one with /local or /remote", cwd)
+		return nil
+	}
+
+	latest := sessions[0]
+
+	if err := checkProviderAvailability(latest.Provider, latest.Model); err != nil {
+		return err
+	}
+
+	out.ok("resuming session %s (%s · %s, %d messages)", latest.UID, latest.Provider, latest.Model, latest.TotalUserMessages)
+
+	return RunAgentSession(latest.Provider, latest.Model, latest.ToolCall, latest.ContextLimit, latest.UID, true, false)
 }

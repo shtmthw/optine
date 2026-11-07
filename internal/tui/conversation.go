@@ -44,6 +44,12 @@ func TranscriptMessages(entries []harnessSession.TranscriptEntry) []Message {
 				Content: entry.Content,
 			}
 
+		case harnessSession.TranscriptEvent:
+			msg = Message{
+				Role:    roleEvent,
+				Content: entry.Content,
+			}
+
 		default:
 			continue
 		}

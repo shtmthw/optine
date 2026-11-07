@@ -386,15 +386,15 @@ func TestMouseClickAnswersApproval(t *testing.T) {
 
 // ---------------------------------------------------------------- view / wire-format
 
-// View includes the title, provider/model/session meta and the prompt, and is
-// safe at width 0 before the first WindowSizeMsg.
+// View includes the logo, provider/model/session meta, the key hint and the
+// prompt, and is safe at width 0 before the first WindowSizeMsg.
 func TestViewRendersMetaAndPrompt(t *testing.T) {
 	m := newTestModel()
 	m.sessionUID = "SESS-1"
-	m, _ = update(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 24})
 
 	out := m.View()
-	for _, want := range []string{"Optine", "Ollama", "test-model", "SESS-1", "Directory: /work", ">"} {
+	for _, want := range []string{titleSpaced, "Ollama", "test-model", "SESS-1", "Directory: /work", "/ for commands", ">"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("View missing %q:\n%s", want, out)
 		}

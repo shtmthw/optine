@@ -3,6 +3,7 @@ package tui
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/mattthew/optine/internal/approval"
 	"github.com/mattthew/optine/internal/harnessSession"
 	"github.com/mattthew/optine/internal/provider"
+	"github.com/mattthew/optine/internal/slashCommands"
 )
 
 // Run launches the Bubble Tea front-end for the agent interface.
@@ -23,7 +25,13 @@ import (
 var activeProgram *tea.Program
 var activePickerResult chan string
 
-func Run(provider string, modelName string, workdir string, resume []Message, agent AgentFunc) error {
+// ErrQuit is returned by Run when the user left with /quit, meaning optine
+// should exit rather than return to the launcher prompt.
+var ErrQuit = errors.New("quit requested")
+
+// Run launches the agent interface. commands are the slash commands this
+// session offers; they feed the "/" palette and /help.
+func Run(provider string, modelName string, workdir string, sessionUID string, resume []Message, commands []slashCommands.Command, agent AgentFunc) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -37,8 +45,14 @@ func Run(provider string, modelName string, workdir string, resume []Message, ag
 	doneCh := make(chan struct{})
 	reader := bufio.NewReader(newLineSource(approvalCh, doneCh))
 
+	model := New(ctx, provider, modelName, workdir, resume, agent, reader, approvalCh)
+	model.palette.commands = commands
+	// Show the session's UID from the first frame; a resumed session already
+	// has one before any message is sent.
+	model.sessionUID = sessionUID
+
 	program := tea.NewProgram(
-		New(ctx, provider, modelName, workdir, resume, agent, reader, approvalCh),
+		model,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
@@ -87,9 +101,17 @@ func Run(provider string, modelName string, workdir string, resume []Message, ag
 		activeProgram = nil
 	}()
 
-	_, err := program.Run()
+	final, err := program.Run()
 	cancel()
-	return err
+	if err != nil {
+		return err
+	}
+
+	if fm, ok := final.(Model); ok && fm.quitRequested {
+		return ErrQuit
+	}
+
+	return nil
 }
 
 // approvalListener is the TUI's side of internal/approval.

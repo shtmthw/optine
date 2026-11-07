@@ -94,7 +94,7 @@ var Bash = NativeTypeTool{Type: "function",
 				},
 				"timeout_ms": {
 					Type:        "integer",
-					Description: "Optional timeout in milliseconds. Default 30000, maximum 120000.",
+					Description: "Optional timeout in milliseconds. Default 30000, maximum 3600000 (60 minutes). Set it for installs, builds and downloads; run servers or watch modes in the background instead.",
 				},
 			},
 			Required: []string{"command"},

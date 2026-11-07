@@ -247,9 +247,20 @@ func isNativeTool(name string) bool {
 	return false
 }
 
+// interruptedToolResult is what the model sees for a call the user's
+// interrupt stopped before it ran.
+const interruptedToolResult = "Tool not run: the user interrupted the request."
+
 // runTool dispatches a tool call and returns failures as text for the model.
 func runTool(ctx context.Context, reader *bufio.Reader, name string, arguments map[string]any) string {
 	harnessSession.NotifyToolCall(name, arguments)
+
+	// After an interrupt the remaining calls of the turn are not run, but each
+	// still gets a result so the saved history keeps every call paired.
+	if ctx.Err() != nil {
+		harnessSession.NotifyToolResult(name, interruptedToolResult)
+		return interruptedToolResult
+	}
 
 	if !isNativeTool(name) {
 		result := fmt.Sprintf("unknown tool %q requested", name)

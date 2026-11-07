@@ -67,7 +67,7 @@ func TestRevertLatestSnapshotUsesSessionBackend(t *testing.T) {
 				t.Fatalf("track after: %v", err)
 			}
 
-			reverted, err := revertLatestSnapshot(sess, work, configDir)
+			reverted, err := revertLatestSnapshot(sess, work, configDir, false)
 			if err != nil {
 				t.Fatalf("revertLatestSnapshot: %v", err)
 			}
@@ -139,8 +139,59 @@ func TestRevertLatestSnapshotNeedsCompletedPair(t *testing.T) {
 
 			tc.setup(t, work, configDir, sess.UID)
 
-			if _, err := revertLatestSnapshot(sess, work, configDir); !errors.Is(err, errNoRevertSnapshotPair) {
+			if _, err := revertLatestSnapshot(sess, work, configDir, false); !errors.Is(err, errNoRevertSnapshotPair) {
 				t.Fatalf("err = %v, want errNoRevertSnapshotPair", err)
+			}
+		})
+	}
+}
+
+// /revert then /redo through restoreLatestRun puts the latest run's changes
+// back exactly, on both snapshot backends.
+func TestRestoreLatestRunRevertThenRedo(t *testing.T) {
+	for _, useGit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("git=%t", useGit), func(t *testing.T) {
+			if useGit && !harnessSnapshotter.GitAvailable() {
+				t.Skip("git is not available")
+			}
+
+			work := t.TempDir()
+			configDir := t.TempDir()
+			sess := &harnessSession.Session{UID: "session-1", Directory: work, GitStatus: useGit, TotalUserMessages: 1}
+
+			store := filepath.Join(configDir, "nonGitBasedSnapshots")
+			track := func(id string) error { return harnessSnapshotter.Track(work, store, id) }
+			if useGit {
+				store = filepath.Join(configDir, "gitBasedSnapshots")
+				track = func(id string) error { return harnessSnapshotter.GitTrack(work, store, id) }
+			}
+
+			read := func(name string) string {
+				data, err := os.ReadFile(filepath.Join(work, name))
+				if err != nil {
+					return "<missing>"
+				}
+				return string(data)
+			}
+
+			writeRevertTestFile(t, filepath.Join(work, "keep.txt"), "original\n")
+			if err := track(sess.UID + "-before-1"); err != nil {
+				t.Fatal(err)
+			}
+			writeRevertTestFile(t, filepath.Join(work, "keep.txt"), "changed\n")
+			writeRevertTestFile(t, filepath.Join(work, "created.txt"), "new\n")
+			if err := track(sess.UID + "-after-1"); err != nil {
+				t.Fatal(err)
+			}
+
+			restoreLatestRun(sess, configDir, false)
+			if read("keep.txt") != "original\n" || read("created.txt") != "<missing>" {
+				t.Fatalf("after /revert: keep=%q created=%q", read("keep.txt"), read("created.txt"))
+			}
+
+			restoreLatestRun(sess, configDir, true)
+			if read("keep.txt") != "changed\n" || read("created.txt") != "new\n" {
+				t.Fatalf("after /redo: keep=%q created=%q", read("keep.txt"), read("created.txt"))
 			}
 		})
 	}

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/mattthew/optine/internal/dataTypes"
@@ -18,76 +18,48 @@ import (
 // un-authorized API key error
 var invalidApiKey = fmt.Errorf("Invalid API key provided, please use a valid API key.")
 
-func handleAPIkeyInput(reader *bufio.Reader, selectedConnection string) error {
-
-	apiKey, err := reader.ReadString('\n')
-
+// selectConnection runs /connect: pick a service and store its API key.
+func selectConnection(reader *bufio.Reader) error {
+	selectedConnection, err := chooseOption(reader, "Connect a service", connections)
 	if err != nil {
 		return err
 	}
 
-	apiKey = strings.TrimSpace(apiKey)
-
-	errSavingConnection := saveConnection(selectedConnection, apiKey)
-
-	if errSavingConnection != nil {
-		return errSavingConnection
+	apiKey, err := readAPIKey(reader, connectionLabel(selectedConnection))
+	if err != nil {
+		return err
 	}
+
+	if err := saveConnection(selectedConnection, apiKey); err != nil {
+		return fmt.Errorf("saving the %s key: %w", connectionLabel(selectedConnection), err)
+	}
+
+	launcherOut.ok("saved the %s key to %s", connectionLabel(selectedConnection), harnessPermissions.AuthPath)
+
+	switch strings.ToLower(selectedConnection) {
+	case "openrouter":
+		launcherOut.info("run /remote to start a session on an OpenRouter model")
+	case "tavily":
+		launcherOut.info("web_search can now use the tavily crawler in new and resumed sessions")
+	}
+
 	return nil
 }
 
-// selectConnection prompts for an API provider and stores its key.
-func selectConnection(reader *bufio.Reader) error {
-	log.Println("<connector list>")
-
-	for i, coonection := range connections {
-		log.Printf("%d. %s\n", i+1, coonection)
+// connectionLabel is the display name for a connection key.
+func connectionLabel(name string) string {
+	switch strings.ToLower(name) {
+	case "openrouter":
+		return "OpenRouter"
+	case "openai":
+		return "OpenAI"
+	case "anthropic":
+		return "Anthropic"
+	case "tavily":
+		return "Tavily"
 	}
 
-	selectedConnection, err := selectOption(reader, 5, connections)
-
-	if err != nil {
-		return handleError(err)
-	}
-
-	switch selectedConnection {
-	case "Tavily":
-
-		log.Printf("You have selected Tavily, please input the API key.")
-
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	case "OpenAI":
-		log.Printf("You have selected OpenAI, please input the API key.")
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	case "Openrouter":
-		log.Printf("You have selected Openrouter, please input the API key.")
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	case "Anthropic":
-		log.Printf("You have selected Anthropic, please input the API key.")
-		err := handleAPIkeyInput(reader, selectedConnection)
-		if err != nil {
-			return handleError(err)
-		}
-		log.Printf("Key set successfully.")
-
-	}
-
-	return nil
+	return name
 }
 
 var modelProviders = map[string]struct{}{
@@ -102,12 +74,12 @@ func filterModelProviderAvailability(reader *bufio.Reader) error {
 
 	data, err := os.ReadFile(authPath)
 	if err != nil {
-		return fmt.Errorf("error occured while trying to read the auth.json file, err: %w ", err)
+		return fmt.Errorf("reading %s: %w", authPath, err)
 	}
 
 	jsonErr := json.Unmarshal(data, &fileContent)
 	if jsonErr != nil {
-		return fmt.Errorf("error occured while trying to unmarshal the auth.json file, err: %w ", jsonErr)
+		return fmt.Errorf("%s is not valid JSON: %w", authPath, jsonErr)
 	}
 
 	supportedProviderList := make([]string, 0, len(fileContent.Connections))
@@ -120,33 +92,31 @@ func filterModelProviderAvailability(reader *bufio.Reader) error {
 	}
 
 	if len(supportedProviderList) == 0 {
-		return fmt.Errorf("no model providers found, please use /connect and connect to the provider with your API key")
+		return fmt.Errorf("no model provider keys saved yet; run /connect and add an OpenRouter key")
 	}
 
-	log.Println("<model providers>")
-	for _, supportedProvider := range supportedProviderList {
-		log.Println(supportedProvider)
-	}
-	selectedConnection, selectErr := selectOption(reader, 5, supportedProviderList)
+	sort.Strings(supportedProviderList)
 
-	if selectErr != nil {
-		return fmt.Errorf("err: %w ", selectErr)
+	options := make([]option, len(supportedProviderList))
+	for i, name := range supportedProviderList {
+		options[i] = option{value: name, label: connectionLabel(name)}
 	}
 
-	connection := fileContent.Connections[strings.ToLower(selectedConnection)]
+	selectedConnection, err := chooseOption(reader, "Remote provider", options)
+	if err != nil {
+		return err
+	}
 
-	apiKey := connection.APIKey
+	apiKey := fileContent.Connections[strings.ToLower(selectedConnection)].APIKey
 
-	log.Printf("Authorizing the key for %s", selectedConnection)
-
-	authErr := checkApiAuthentication(selectedConnection, apiKey)
-
+	authErr := checkApiAuthentication(strings.ToLower(selectedConnection), apiKey)
 	if authErr != nil {
 		if errors.Is(authErr, invalidApiKey) {
 			return invalidApiKey
 		}
-		return fmt.Errorf("err: %w ", authErr)
+		return authErr
 	}
+
 	return nil
 }
 
@@ -168,14 +138,13 @@ func checkApiAuthentication(providerName, apiKey string) error {
 		}
 
 		hasTools := slices.Contains(modelData.SupportedParameters, "tools")
+		launcherOut.ok("OpenRouter key authorized; starting on %s (/model switches)", modelData.ID)
+		reportToolSupport(modelData.ID, hasTools)
 
 		return RunAgentSession("Openrouter", modelData.ID, hasTools, modelData.ContextLength, "", false, false)
 
-	case "openai":
-		return fmt.Errorf("under development")
-
-	case "anthropic":
-		return fmt.Errorf("under development")
+	case "openai", "anthropic":
+		return fmt.Errorf("the %s provider is still in development; its key is stored for when it lands", connectionLabel(providerName))
 	default:
 		return fmt.Errorf("unrecognized model provider, please select a valid and supported model provider")
 	}

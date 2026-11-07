@@ -119,7 +119,7 @@ func TestRunCommandEOFExits(t *testing.T) {
 
 // /local and /connect are refused while already inside the agent interface.
 func TestRunCommandNestedSessionCommandsRefused(t *testing.T) {
-	for _, cmd := range []string{"/local", "/connect"} {
+	for _, cmd := range []string{"/local", "/remote", "/connect"} {
 		if RunCommand(cmd, true, reader("")) {
 			t.Fatalf("%s inside the interface should not quit", cmd)
 		}
@@ -205,7 +205,7 @@ func TestResumeSessionReturnsSavedTranscript(t *testing.T) {
 
 	var gotProvider, gotModel string
 	oldNotify := notifyModelChanged
-	notifyModelChanged = func(provider, model string) {
+	notifyModelChanged = func(provider, model, UID string) {
 		gotProvider, gotModel = provider, model
 	}
 	t.Cleanup(func() { notifyModelChanged = oldNotify })

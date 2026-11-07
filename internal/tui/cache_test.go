@@ -126,7 +126,8 @@ func TestRenderCacheInvalidatesOnSwapWithSameCount(t *testing.T) {
 }
 
 func TestRenderCacheInvalidatesOnSessionChange(t *testing.T) {
-	m := newTestModelAt(80, 24)
+	// Wide enough that the header shows the session beside the title.
+	m := newTestModelAt(120, 24)
 	m.sessionUID = "OLD"
 	_ = m.View()
 
