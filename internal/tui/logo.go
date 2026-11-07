@@ -105,17 +105,3 @@ func logoLines(width int) []string {
 
 	return lines
 }
-
-// centerLine centers an already styled line within width.
-func centerLine(width int, line string) string {
-	if width <= 0 {
-		return line
-	}
-
-	pad := (width - lipgloss.Width(line)) / 2
-	if pad <= 0 {
-		return line
-	}
-
-	return strings.Repeat(" ", pad) + line
-}
