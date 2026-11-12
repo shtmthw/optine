@@ -34,6 +34,10 @@ restart, and /revert restores the files from the latest run.
 9. Sessional memory: conversation history, the tool-call mode and the composed system prompt are saved under your user config directory and reloaded with /resume, including the snapshot backend chosen when the session started, and replayed in the TUI
 10. Before/after file snapshots for every run and /revert to restore changed or deleted files from the latest run and remove files it created
 
+## The Planned Implementation Diagram.
+
+![DIAGRAM](screenshots/Screenshot_20261112_110513.png)
+
 ## Requirements
 
 1. Go 1.27.2, pinned in go.mod
