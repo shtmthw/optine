@@ -38,7 +38,7 @@ restart, and /revert restores the files from the latest run.
 
 ![DIAGRAM](screenshots/Screenshot_20261112_110513.png)
 
-THE LINK TO THE DIAGRAM: [Excalidraw](https://hub.docker.com/r/matthew552/eaternity)
+The link to it: [Excalidraw](https://excalidraw.com/#room=2399978c9a0befade30e,oUWfzHSql_iSfuXOmRaTzA)
 
 
 ## Requirements
