@@ -10,6 +10,8 @@ type NonNativeChatRequest struct {
 	Messages []*NonNativeMessage `json:"messages"`
 	Stream   bool                `json:"stream"`
 	Format   string              `json:"format,omitempty"`
+	// Think is Ollama's reasoning setting; see NativeToolChatRequest.Think.
+	Think any `json:"think,omitempty"`
 }
 
 type NonNativeChatResponse struct {
@@ -31,6 +33,10 @@ type OpenAINonNativeChatRequest struct {
 	Messages       []*NonNativeMessage      `json:"messages"`
 	Stream         bool                     `json:"stream"`
 	ResponseFormat *NonNativeResponseFormat `json:"response_format,omitempty"`
+
+	// Reasoning is OpenRouter's effort setting, ReasoningEffort vLLM's.
+	Reasoning       *ReasoningRequest `json:"reasoning,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 }
 
 type OpenAINonNativeChatResponse struct {

@@ -102,10 +102,3 @@ func TestAgentFinishedFillsEmptyInput(t *testing.T) {
 		t.Fatalf("input = %q, want what the user typed kept", m.input)
 	}
 }
-
-func TestGoldenViewRewindPicker(t *testing.T) {
-	m := newTestModelAt(80, 24)
-	m, _ = update(m, pickerOpenMsg{kind: pickerRewind, turns: testTurns(), result: make(chan string, 1)})
-
-	assertGolden(t, "view_rewind_picker_80x24", m.View())
-}

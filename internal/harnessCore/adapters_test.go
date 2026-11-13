@@ -14,7 +14,7 @@ func TestOllamaReqBodyConvertsUnifiedHistory(t *testing.T) {
 		{Role: "tool", ToolCallID: "call_1", Content: "result"},
 	}
 
-	req := produceOllamaReqBody(msgs, "m", "sys")
+	req := produceOllamaReqBody(msgs, "m", "sys", effortWire{})
 
 	if len(req.Messages) != 4 {
 		t.Fatalf("messages = %d, want 4", len(req.Messages))
@@ -38,7 +38,7 @@ func TestOpenAIReqBodyRepairsMissingToolIDs(t *testing.T) {
 		{Role: "tool", Content: "result"},
 	}
 
-	req := produceOpenAIReqBody(msgs, "m", "sys")
+	req := produceOpenAIReqBody(msgs, "m", "sys", effortWire{})
 
 	call := req.Messages[1].ToolCalls[0]
 	if call.ID == "" {
@@ -66,7 +66,7 @@ func TestNonNativeReqBodyMapsToolRoleToUser(t *testing.T) {
 		{Role: "tool", ToolCallID: "call_1", Content: "result"},
 	}
 
-	req := produceNonNativeReqBody(msgs, "m", "sys")
+	req := produceNonNativeReqBody(msgs, "m", "sys", effortWire{})
 
 	if len(req.Messages) != 3 {
 		t.Fatalf("messages = %d, want 3", len(req.Messages))

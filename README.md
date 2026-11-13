@@ -33,6 +33,7 @@ restart, and /revert restores the files from the latest run.
 8. A terminal interface with a / command palette (filtered as you type, arrow keys, tab to complete, clickable) that offers only the commands of the current session, local or remote, plus clickable approval prompts, interactive model and session pickers, markdown output, copy shortcuts and cached conversation rendering
 9. Sessional memory: conversation history, the tool-call mode and the composed system prompt are saved under your user config directory and reloaded with /resume, including the snapshot backend chosen when the session started, and replayed in the TUI
 10. Before/after file snapshots for every run and /revert to restore changed or deleted files from the latest run and remove files it created
+11. /effort to set how hard the model reasons, on Ollama, vLLM and OpenRouter models that support it, saved with the session
 
 ## The Planned Implementation Diagram.
 
@@ -43,7 +44,7 @@ The link to it: [Excalidraw](https://excalidraw.com/#room=2399978c9a0befade30e,o
 
 ## Requirements
 
-1. Go 1.27.2, pinned in go.mod
+1. Go 1.27.4, pinned in go.mod
 2. Linux or macOS for the bash tool
 3. Ollama running on localhost:11434, or vLLM on localhost:8000
 4. Optional: an OpenRouter API key, set with /connect, to run hosted models
@@ -62,7 +63,8 @@ inside a session lists the commands available there. Inside the interface,
 /model switches models, /new starts an empty session, /resume reopens a saved
 session, /revert restores files from the latest run, /redo puts that run's
 changes back after a /revert, /rewind takes the conversation and files back
-to before one of your messages, and /quit exits optine;
+to before one of your messages, /effort sets how hard the model reasons, and
+/quit exits optine;
 ctrl+c leaves the session and returns to the launcher. /help lists every
 command. Without a terminal (piped input), the launcher falls back to plain
 lines and numbered lists.
@@ -124,6 +126,26 @@ every run from the picked message on is undone, newest first, the history is
 cut there and saved, and your message runs on the rewound conversation.
 Leaving or switching sessions before that discards the rewind. A run without a
 complete snapshot pair is reported and its files are left as they are.
+
+## Effort
+
+/effort opens a picker of the reasoning levels the current model accepts, with
+the current level first; /effort high sets one directly. default sends nothing
+and lets the model decide, off turns reasoning off where the model allows it,
+and models that can only switch thinking on or off get on and off instead of
+levels. The level shows on the header line, is saved with the session and
+comes back with /resume and /new. /model keeps it: a model that does not take
+it gets nothing sent, and the level returns on the next model that does.
+
+| Provider | Request field | Levels | How optine learns support |
+| --- | --- | --- | --- |
+| OpenRouter | reasoning.effort | the model's listed levels: minimal, low, medium, high, xhigh, max; off sends none | the model's reasoning entry in the catalog |
+| Ollama | think | the model's levels, or on and off; off sends false | the thinking values from /api/show |
+| vLLM | reasoning_effort | low, medium, high; off sends none | one short probe request when the model is picked |
+
+vLLM must be started with --reasoning-parser for the probe to see reasoning,
+and what each level does is up to the model's chat template. The model's
+reasoning text is not shown in the interface.
 
 ## Approvals
 

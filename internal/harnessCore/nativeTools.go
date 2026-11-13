@@ -82,7 +82,7 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 		return ollamaToolLoop(ctx, reader, modelName, sess)
 
 	case "vLLM":
-		return openAiToolLoop(ctx, reader, modelName, sess, "http://localhost:8000/v1/chat/completions", "")
+		return openAiToolLoop(ctx, reader, modelName, sess, vLLMChatURL, "")
 
 	case "Openrouter":
 		key, err := harnessPermissions.GetAPIKey("openrouter")
@@ -98,12 +98,13 @@ func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, read
 
 func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
 	history := &sess.Messages
+	effort := wireEffort("Ollama", sess.EffortSupport, sess.Effort)
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
 
-		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName, sess.SystemPrompt), &response)
+		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -161,12 +162,14 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session, chatURL string, apiKey string) (string, error) {
 
 	history := &sess.Messages
+	// vLLM and OpenRouter share this loop; the session says which one runs.
+	effort := wireEffort(sess.Provider, sess.EffortSupport, sess.Effort)
 
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.OpenAIChatResponse
-		err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt), &response)
+		err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -297,7 +300,7 @@ func decodeOpenAIArguments(raw string) (map[string]any, error) {
 	return arguments, nil
 }
 
-func produceOllamaReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.NativeToolChatRequest {
+func produceOllamaReqBody(messages []harnessSession.Message, modelName string, systemPrompt string, effort effortWire) dataTypes.NativeToolChatRequest {
 	allMessages := make([]*dataTypes.NativeTooltypeMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
 		allMessages = append(allMessages, &dataTypes.NativeTooltypeMessage{Role: "system", Content: systemPrompt})
@@ -312,6 +315,7 @@ func produceOllamaReqBody(messages []harnessSession.Message, modelName string, s
 		Messages: allMessages,
 		Stream:   false,
 		Tools:    nativeTools(),
+		Think:    effort.Think,
 	}
 }
 
@@ -332,7 +336,7 @@ func ollamaWireMessage(msg harnessSession.Message) *dataTypes.NativeTooltypeMess
 	}
 }
 
-func produceOpenAIReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.OpenAIChatRequest {
+func produceOpenAIReqBody(messages []harnessSession.Message, modelName string, systemPrompt string, effort effortWire) dataTypes.OpenAIChatRequest {
 	allMessages := make([]*dataTypes.OpenAIChatMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
 		allMessages = append(allMessages, &dataTypes.OpenAIChatMessage{Role: "system", Content: systemPrompt})
@@ -382,6 +386,9 @@ func produceOpenAIReqBody(messages []harnessSession.Message, modelName string, s
 		Stream:     false,
 		Tools:      nativeTools(),
 		ToolChoice: "auto",
+
+		Reasoning:       effort.Reasoning,
+		ReasoningEffort: effort.ReasoningEffort,
 	}
 }
 

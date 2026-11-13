@@ -28,6 +28,8 @@ type OllamaShowResponse struct {
 	Template     string         `json:"template"`
 	Parser       string         `json:"parser"`
 	ModelInfo    map[string]any `json:"model_info"`
+	// Thinking lists the values "think" accepts; nil when not reported.
+	Thinking *OllamaThinking `json:"thinking,omitempty"`
 }
 
 type RunningModel struct {

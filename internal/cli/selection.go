@@ -194,6 +194,16 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 
 	launcherOut.info("session %s · %s · %s · %s", sess.UID, providerName, modelName, sess.Directory)
 
+	// What the model accepts for /effort; vLLM needs a short probe request.
+	var effortNotice string
+	_ = withSpinner(fmt.Sprintf("Checking %s for effort levels", sess.Model), func() error {
+		effortNotice = refreshEffortSupport(context.Background(), sess)
+		return nil
+	})
+	if effortNotice != "" {
+		launcherOut.warn("%s", effortNotice)
+	}
+
 	configDir := filepath.Dir(harnessPermissions.AuthPath)
 
 	// pendingRewind is the message number /rewind picked (0 if none). The view
@@ -295,6 +305,11 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 				agentConf.NativeToolCalling = modelToolSupport[selected]
 
 				tui.NotifyModelChanged(agentConf.Provider, agentConf.Model, sess.UID)
+
+				// The level stays; it is sent only if the new model takes it.
+				if notice := refreshEffortSupport(ctx, sess); notice != "" {
+					log.Println(notice)
+				}
 			}
 
 			return tui.AgentResult{}, nil
@@ -315,11 +330,14 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 				MaxTurns:     harnessCore.MaxTurns,
 				LocalOnly:    sess.LocalOnly,
 				ToolCall:     agentConf.NativeToolCalling,
+				Effort:       sess.Effort,
 			}, "")
 			if err != nil {
 				log.Printf("error occurred while shifting to a new session: %v", err)
 				return tui.AgentResult{}, nil
 			}
+			// Same model, so the same support.
+			newSess.EffortSupport = sess.EffortSupport
 			sess = newSess
 			pendingRewind = 0
 			notifyModelChanged(sess.Provider, sess.Model, sess.UID)
@@ -347,6 +365,11 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			agentConf.Model = sess.Model
 			agentConf.NativeToolCalling = sess.ToolCall
 
+			// The resumed session brings its own level and maybe another model.
+			if notice := refreshEffortSupport(ctx, sess); notice != "" {
+				log.Println(notice)
+			}
+
 			// Replace the pane with the newly-loaded conversation.
 			return tui.AgentResult{
 				Messages: tui.TranscriptMessages(next.Transcript()),
@@ -369,6 +392,13 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			return result, nil
 		}
 
+		if msg == "/effort" || strings.HasPrefix(msg, "/effort ") {
+			for _, line := range runEffort(sess, strings.TrimPrefix(msg, "/effort")) {
+				log.Println(line)
+			}
+			return tui.AgentResult{}, nil
+		}
+
 		if strings.HasPrefix(msg, "/") {
 			RunCommand(msg, true, r)
 			return tui.AgentResult{}, nil
@@ -385,7 +415,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 		return tui.AgentResult{Response: answer}, err
 	}
 
-	if err := tui.Run(agentConf.Provider, agentConf.Model, CWD, sess.UID, initialMessages, slashCommands.For(scope), agent); err != nil {
+	if err := tui.Run(agentConf.Provider, agentConf.Model, CWD, sess.UID, headerEffort(sess), initialMessages, slashCommands.For(scope), agent); err != nil {
 		if errors.Is(err, tui.ErrQuit) {
 			return err
 		}

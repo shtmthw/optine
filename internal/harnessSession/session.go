@@ -43,6 +43,9 @@ type Config struct {
 	// ToolCall selects native tool calling for a new session. Load restores the
 	// saved value instead of consulting this field.
 	ToolCall bool
+	// Effort is the reasoning level a new session starts at; /new passes the
+	// current one on. Load restores the saved value instead.
+	Effort Effort
 }
 
 // Message is one conversation turn in provider-neutral form. The system
@@ -82,6 +85,12 @@ type Session struct {
 	RunCount          int
 	TotalUserMessages int
 	LastPromptTokens  int
+
+	// Effort is the /effort level, saved with the session. EffortSupport is
+	// what the active model accepts; it is worked out per model and never
+	// saved.
+	Effort        Effort
+	EffortSupport EffortSupport
 
 	SystemPrompt string
 
@@ -130,6 +139,7 @@ func New(cfg Config) *Session {
 		GitStatus:    cfg.GitStatus,
 		LocalOnly:    cfg.LocalOnly,
 		ToolCall:     cfg.ToolCall,
+		Effort:       cfg.Effort,
 	}
 
 	s.SystemCache = newSystemCache(cfg.MaxTurns, cfg.ToolCall)

@@ -44,6 +44,10 @@ type NativeToolChatRequest struct {
 	Stream   bool                     `json:"stream"`
 	Tools    []NativeTypeTool         `json:"tools,omitempty"`
 	// Do not combine Tools with Format:"json"; gpt-oss can drop content.
+
+	// Think is Ollama's reasoning setting: a level string or a bool. nil sends
+	// nothing; false is still sent, since it turns thinking off.
+	Think any `json:"think,omitempty"`
 }
 
 type NativeToolChatResponse struct {
@@ -81,6 +85,11 @@ type OpenAIChatRequest struct {
 	Tools    []NativeTypeTool     `json:"tools,omitempty"`
 	// vLLM defaults tool_choice to "none", so send "auto" explicitly.
 	ToolChoice string `json:"tool_choice,omitempty"`
+
+	// Reasoning is OpenRouter's effort setting, ReasoningEffort vLLM's; at
+	// most one is set.
+	Reasoning       *ReasoningRequest `json:"reasoning,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 }
 
 type OpenAIChatResponse struct {

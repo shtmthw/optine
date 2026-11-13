@@ -23,7 +23,7 @@ func nonNativeWireMessage(msg harnessSession.Message) *dataTypes.NonNativeMessag
 	return &dataTypes.NonNativeMessage{Role: role, Content: msg.Content}
 }
 
-func produceNonNativeReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.NonNativeChatRequest {
+func produceNonNativeReqBody(messages []harnessSession.Message, modelName string, systemPrompt string, effort effortWire) dataTypes.NonNativeChatRequest {
 
 	allMessages := make([]*dataTypes.NonNativeMessage, 0, len(messages)+1)
 	if systemPrompt != "" {
@@ -40,12 +40,13 @@ func produceNonNativeReqBody(messages []harnessSession.Message, modelName string
 
 		// Valid JSON output, not native tool calling.
 		Format: "json",
+		Think:  effort.Think,
 	}
 
 	return requestBody
 }
 
-func produceOpenAINonNativeReqBody(messages []harnessSession.Message, modelName string, systemPrompt string) dataTypes.OpenAINonNativeChatRequest {
+func produceOpenAINonNativeReqBody(messages []harnessSession.Message, modelName string, systemPrompt string, effort effortWire) dataTypes.OpenAINonNativeChatRequest {
 
 	var responseFormat = dataTypes.NonNativeResponseFormat{
 		Type: "json_object",
@@ -66,27 +67,30 @@ func produceOpenAINonNativeReqBody(messages []harnessSession.Message, modelName 
 
 		// vLLM and OpenRouter spell Ollama's Format:"json" as response_format.
 		ResponseFormat: &responseFormat,
+
+		Reasoning:       effort.Reasoning,
+		ReasoningEffort: effort.ReasoningEffort,
 	}
 
 	return requestBody
 }
 
-func ollamaNonNativeChat(ctx context.Context, messages []harnessSession.Message, modelName string, systemPrompt string, _, _ string) (*dataTypes.NonNativeMessage, int, error) {
+func ollamaNonNativeChat(ctx context.Context, messages []harnessSession.Message, modelName string, systemPrompt string, _, _ string, effort effortWire) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.NonNativeChatResponse
 
-	if err := postJSON(ctx, ollamaChatURL, produceNonNativeReqBody(messages, modelName, systemPrompt), &result); err != nil {
+	if err := postJSON(ctx, ollamaChatURL, produceNonNativeReqBody(messages, modelName, systemPrompt, effort), &result); err != nil {
 		return nil, 0, err
 	}
 
 	return &result.Message, result.PromptEvalCount, nil
 }
 
-func openAiNonNativeChat(ctx context.Context, messages []harnessSession.Message, modelName string, systemPrompt string, chatURL string, apiKey string) (*dataTypes.NonNativeMessage, int, error) {
+func openAiNonNativeChat(ctx context.Context, messages []harnessSession.Message, modelName string, systemPrompt string, chatURL string, apiKey string, effort effortWire) (*dataTypes.NonNativeMessage, int, error) {
 
 	var result dataTypes.OpenAINonNativeChatResponse
 
-	if err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAINonNativeReqBody(messages, modelName, systemPrompt), &result); err != nil {
+	if err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAINonNativeReqBody(messages, modelName, systemPrompt, effort), &result); err != nil {
 		return nil, 0, err
 	}
 
@@ -183,7 +187,7 @@ func correctionForBadEnvelope(raw string) string {
 	)
 }
 
-type nonNativeChat func(ctx context.Context, messages []harnessSession.Message, modelName, systemPrompt, chatURL, apiKey string) (*dataTypes.NonNativeMessage, int, error)
+type nonNativeChat func(ctx context.Context, messages []harnessSession.Message, modelName, systemPrompt, chatURL, apiKey string, effort effortWire) (*dataTypes.NonNativeMessage, int, error)
 
 func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
 
@@ -210,11 +214,12 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 	}
 
 	history := &sess.Messages
+	effort := wireEffort(provider, sess.EffortSupport, sess.Effort)
 
 	turns := baseTurns
 	badBodies := 0
 	for turn := 0; turn < turns; turn++ {
-		reply, promptTokens, err := chat(ctx, *history, modelName, sess.SystemPrompt, chatURL, apiKey)
+		reply, promptTokens, err := chat(ctx, *history, modelName, sess.SystemPrompt, chatURL, apiKey, effort)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, fmt.Errorf("malformed HTTP body from %s: %w", provider, err))

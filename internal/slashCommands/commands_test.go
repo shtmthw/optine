@@ -31,7 +31,7 @@ func TestScopesOfferTheRightCommands(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"/model", "/new", "/revert", "/redo", "/rewind"} {
+	for _, name := range []string{"/model", "/new", "/revert", "/redo", "/rewind", "/effort"} {
 		if slices.Contains(launcher, name) {
 			t.Fatalf("%s needs a session and must not be offered in the launcher", name)
 		}

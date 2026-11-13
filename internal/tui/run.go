@@ -31,8 +31,9 @@ var activePickerResult chan string
 var ErrQuit = errors.New("quit requested")
 
 // Run launches the agent interface. commands are the slash commands this
-// session offers; they feed the "/" palette and /help.
-func Run(provider string, modelName string, workdir string, sessionUID string, resume []Message, commands []slashCommands.Command, agent AgentFunc) error {
+// session offers; they feed the "/" palette and /help. effort is the
+// session's /effort level for the header ("" or "default" shows none).
+func Run(provider string, modelName string, workdir string, sessionUID string, effort string, resume []Message, commands []slashCommands.Command, agent AgentFunc) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -51,6 +52,7 @@ func Run(provider string, modelName string, workdir string, sessionUID string, r
 	// Show the session's UID from the first frame; a resumed session already
 	// has one before any message is sent.
 	model.sessionUID = sessionUID
+	model.effort = effort
 
 	program := tea.NewProgram(
 		model,
@@ -254,4 +256,41 @@ func PickRewind(turns []harnessSession.UserTurn) (harnessSession.UserTurn, bool)
 		}
 	}
 	return harnessSession.UserTurn{}, false
+}
+
+// EffortChoice is one /effort picker row: the level it picks, the text shown
+// for it, and whether it is the session's current level (marked <current>).
+type EffortChoice struct {
+	Level   string
+	Label   string
+	Current bool
+}
+
+// PickEffort opens the /effort picker over the given levels, in order, and
+// blocks until the user picks one or cancels. It returns the picked level and
+// whether one was picked.
+func PickEffort(choices []EffortChoice) (string, bool) {
+	if len(choices) == 0 {
+		return "", false
+	}
+	prog := activeProgram
+	if prog == nil {
+		return "", false
+	}
+	levels := make([]string, len(choices))
+	labels := make([]string, len(choices))
+	current := ""
+	for i, c := range choices {
+		levels[i], labels[i] = c.Level, c.Label
+		if c.Current {
+			current = c.Level
+		}
+	}
+	result := make(chan string, 1)
+	prog.Send(pickerOpenMsg{kind: pickerEffort, choices: levels, labels: labels, current: current, result: result})
+	selected, ok := <-result
+	if !ok || selected == "" {
+		return "", false
+	}
+	return selected, true
 }

@@ -97,6 +97,10 @@ type Model struct {
 
 	sessionUID string
 
+	// effort is the session's /effort level, shown beside the model unless
+	// it is the default.
+	effort string
+
 	input    string
 	cursor   int // rune index into input
 	messages []Message
@@ -235,6 +239,19 @@ type modelChangedMsg struct {
 func NotifyModelChanged(provider, model, UID string) {
 	if activeProgram != nil {
 		activeProgram.Send(modelChangedMsg{provider: provider, model: model, UID: UID})
+	}
+}
+
+// effortChangedMsg carries the level /effort picked to the header.
+type effortChangedMsg struct {
+	level string
+}
+
+// NotifyEffortChanged updates the effort shown in the active TUI's header.
+// "" or "default" shows none.
+func NotifyEffortChanged(level string) {
+	if activeProgram != nil {
+		activeProgram.Send(effortChangedMsg{level: level})
 	}
 }
 
@@ -509,6 +526,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.UID != "" {
 			m.sessionUID = msg.UID
 		}
+		m.cache.invalidate()
+
+	case effortChangedMsg:
+		m.effort = msg.level
 		m.cache.invalidate()
 
 	case modelLoadingMsg:
@@ -922,6 +943,16 @@ const (
 // userHome is replaced by ~ in the directory; a variable so tests can pin it.
 var userHome, _ = os.UserHomeDir()
 
+// modelWithEffort is the header's model text: the model, then the /effort
+// level when one is set, e.g. "qwen3:8b · effort high".
+func modelWithEffort(model, effort string) string {
+	if model == "" || effort == "" || effort == "default" {
+		return model
+	}
+
+	return model + " · effort " + effort
+}
+
 // headerSides lists the center text (provider, model, session) and the
 // right text (directory) from longest to shortest form.
 func headerSides(providerName, modelName, sessionUID, workdir string) (center, right []string) {
@@ -1221,7 +1252,7 @@ func (c *renderCache) rebuild(m Model) {
 
 	// Two blank rows of padding above the header bar and two below it.
 	b.WriteString("\n\n")
-	b.WriteString(headerBar(m.width, m.provider, m.modelName, m.sessionUID, m.workdir))
+	b.WriteString(headerBar(m.width, m.provider, modelWithEffort(m.modelName, m.effort), m.sessionUID, m.workdir))
 	b.WriteString("\n\n\n")
 
 	// A tool call joins its directly following result into one block.

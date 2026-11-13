@@ -49,6 +49,7 @@ type sessionFile struct {
 	RunCount          int       `json:"run_count"`
 	TotalUserMessages int       `json:"total_user_messages"`
 	LastPromptTokens  int       `json:"last_prompt_tokens,omitempty"`
+	Effort            Effort    `json:"effort,omitempty"`
 	SystemPrompt      string    `json:"system_prompt,omitempty"`
 	Messages          []Message `json:"messages,omitempty"`
 }
@@ -74,6 +75,7 @@ func toFile(s *Session) sessionFile {
 		RunCount:          s.RunCount,
 		TotalUserMessages: s.TotalUserMessages,
 		LastPromptTokens:  s.LastPromptTokens,
+		Effort:            s.Effort,
 		SystemPrompt:      s.SystemPrompt,
 		Messages:          s.Messages,
 	}
@@ -247,6 +249,7 @@ func Load(uid string) (*Session, error) {
 		RunCount:          f.RunCount,
 		TotalUserMessages: f.TotalUserMessages,
 		LastPromptTokens:  f.LastPromptTokens,
+		Effort:            f.Effort,
 		SystemPrompt:      f.SystemPrompt,
 	}
 
@@ -260,6 +263,9 @@ func Load(uid string) (*Session, error) {
 	if s.ContextLimit <= 0 {
 		s.ContextLimit = DefaultContextLimit
 	}
+
+	// A level this build does not know (an edited file) loads as default.
+	s.Effort, _ = ParseEffort(string(s.Effort))
 
 	s.restoreSystemCache()
 
