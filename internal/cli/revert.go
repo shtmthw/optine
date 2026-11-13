@@ -2,8 +2,10 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/mattthew/optine/internal/harnessSession"
 	"github.com/mattthew/optine/internal/harnessSnapshotter"
@@ -13,33 +15,41 @@ import (
 // snapshot pair for its most recent run, so there is nothing safe to restore.
 var errNoRevertSnapshotPair = errors.New("no completed snapshot pair to revert")
 
+// snapshotStore is the directory of the snapshot backend the session was
+// created with.
+func snapshotStore(sess *harnessSession.Session, configDir string) string {
+	if sess.GitStatus {
+		return filepath.Join(configDir, "gitBasedSnapshots")
+	}
+
+	return filepath.Join(configDir, "nonGitBasedSnapshots")
+}
+
+// restoreSnapshot puts the files that differ between snapshots from and to
+// back as they were in from, and removes the files created after it.
+func restoreSnapshot(gitStatus bool, workdir, store, from, to string) ([]string, error) {
+	if gitStatus {
+		return harnessSnapshotter.GitRevert(workdir, store, from, to)
+	}
+
+	return harnessSnapshotter.Revert(workdir, store, from, to)
+}
+
 // revertLatestSnapshot restores the files changed by the latest run using the
 // same snapshot backend the session was created with.
 func revertLatestSnapshot(sess *harnessSession.Session, workdir, configDir string, isRedo bool) ([]string, error) {
-	snapshotDir := filepath.Join(configDir, "nonGitBasedSnapshots")
-	if sess.GitStatus {
-		snapshotDir = filepath.Join(configDir, "gitBasedSnapshots")
-	}
+	store := snapshotStore(sess, configDir)
 
-	latest, before := harnessSnapshotter.CalculateSnapshotLatestID(snapshotDir, sess.UID, sess.GitStatus)
+	latest, before := harnessSnapshotter.CalculateSnapshotLatestID(store, sess.UID, sess.GitStatus)
 	if latest == "" || before == "" || latest == before {
 		return nil, errNoRevertSnapshotPair
 	}
 
-	switch isRedo {
-	case false:
-		if sess.GitStatus {
-			return harnessSnapshotter.GitRevert(workdir, snapshotDir, before, latest)
-		}
-
-		return harnessSnapshotter.Revert(workdir, snapshotDir, before, latest)
-	default:
-		if sess.GitStatus {
-			return harnessSnapshotter.GitRevert(workdir, snapshotDir, latest, before)
-		}
-
-		return harnessSnapshotter.Revert(workdir, snapshotDir, latest, before)
+	if isRedo {
+		return restoreSnapshot(sess.GitStatus, workdir, store, latest, before)
 	}
+
+	return restoreSnapshot(sess.GitStatus, workdir, store, before, latest)
 }
 
 // restoreLatestRun runs /revert (isRedo false: put the files back as they
@@ -71,8 +81,13 @@ func restoreLatestRun(sess *harnessSession.Session, configDir string, isRedo boo
 		log.Printf("No file changes were made, so there was nothing to %s.", verb)
 		return
 	}
+	var messageString strings.Builder
 
 	for _, path := range paths {
-		log.Printf("%s: %s", done, path)
+		message := fmt.Sprintf("%s: %s", done, path)
+		messageString.WriteString(message + "\n")
+		log.Println(message)
 	}
+
+	sess.AppendUser("User has:\n" + messageString.String())
 }

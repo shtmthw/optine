@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -9,10 +10,10 @@ import (
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
-// The /model and /resume commands share one interactive list: a searchable
-// picker rendered as a centered box. pickerKind selects the labels and the
-// row format; filtering, scrolling, keys and mouse handling are shared, so
-// the two commands cannot drift apart again.
+// The /model, /resume and /rewind commands share one interactive list: a
+// searchable picker rendered as a centered box. pickerKind selects the labels
+// and the row format; filtering, scrolling, keys and mouse handling are
+// shared, so the commands cannot drift apart again.
 
 type pickerKind int
 
@@ -20,30 +21,39 @@ const (
 	pickerNone pickerKind = iota
 	pickerModel
 	pickerSession
+	pickerRewind
 )
 
 // pickerOpenMsg opens the shared picker in the TUI.
 type pickerOpenMsg struct {
 	kind    pickerKind
-	choices []string              // pickerModel: model IDs
-	metas   []harnessSession.Meta // pickerSession: saved sessions
+	choices []string                  // pickerModel: model IDs
+	metas   []harnessSession.Meta     // pickerSession: saved sessions
+	turns   []harnessSession.UserTurn // pickerRewind: the user's messages
 	result  chan string
 }
 
-// pickerState is the picker's whole state. all/allLower/allMetas hold the
-// unfiltered source; choices/metas are the filtered rows on screen.
+// pickerState is the picker's whole state. all/allLower/allMetas/allTurns
+// hold the unfiltered source; choices/metas/turns are the filtered rows on
+// screen. allLower is the lowered text the search matches against.
 type pickerState struct {
 	kind     pickerKind
 	all      []string
 	allLower []string
 	allMetas []harnessSession.Meta
+	allTurns []harnessSession.UserTurn
 	choices  []string
 	metas    []harnessSession.Meta
+	turns    []harnessSession.UserTurn
 	query    string
 	cursor   int
 	scroll   int
 	result   chan string
 }
+
+// rewindPreviewMax caps a /rewind row's message preview, in runes, so a long
+// message cannot widen the box past the screen.
+const rewindPreviewMax = 60
 
 func (p pickerState) active() bool { return p.kind != pickerNone }
 
@@ -59,30 +69,44 @@ var (
 )
 
 // openPicker resets the shared picker from an open message. Model IDs become
-// the rows directly; sessions contribute their UIDs as rows with their meta
-// kept in a parallel slice for rendering.
+// the rows directly; sessions contribute their UIDs and messages their
+// numbers as rows, with the meta or message kept in a parallel slice for
+// rendering. A message row is searched by its text, the others by their ID.
 func (m *Model) openPicker(msg pickerOpenMsg) {
 	p := &m.picker
 
 	p.kind = msg.kind
-	if msg.kind == pickerSession {
+	p.allMetas, p.allTurns = nil, nil
+	switch msg.kind {
+	case pickerSession:
 		p.allMetas = append([]harnessSession.Meta(nil), msg.metas...)
 		p.all = make([]string, len(msg.metas))
 		for i, s := range msg.metas {
 			p.all[i] = s.UID
 		}
-	} else {
+
+	case pickerRewind:
+		p.allTurns = append([]harnessSession.UserTurn(nil), msg.turns...)
+		p.all = make([]string, len(msg.turns))
+		for i, t := range msg.turns {
+			p.all[i] = strconv.Itoa(t.Number)
+		}
+
+	default:
 		p.all = append([]string(nil), msg.choices...)
-		p.allMetas = nil
 	}
 
 	p.allLower = make([]string, len(p.all))
 	for i, choice := range p.all {
+		if p.kind == pickerRewind {
+			choice = rewindRowText(p.allTurns[i])
+		}
 		p.allLower[i] = strings.ToLower(choice)
 	}
 
 	p.choices = append([]string(nil), p.all...)
 	p.metas = append([]harnessSession.Meta(nil), p.allMetas...)
+	p.turns = append([]harnessSession.UserTurn(nil), p.allTurns...)
 	p.query = ""
 	p.cursor = 0
 	p.scroll = 0
@@ -210,43 +234,43 @@ func (m *Model) setPickerQuery(q string) {
 	m.picker.query = q
 	m.input = q
 	m.cursor = len([]rune(q))
-	m.picker.choices, m.picker.metas = filterPicker(
-		m.picker.all, m.picker.allLower, m.picker.allMetas, q,
-	)
+
+	keep := filterPicker(m.picker.allLower, q)
+	m.picker.choices = pickRows(m.picker.all, keep)
+	m.picker.metas = pickRows(m.picker.allMetas, keep)
+	m.picker.turns = pickRows(m.picker.allTurns, keep)
+
 	m.picker.cursor = 0
 	m.picker.scroll = 0
 	m.ensurePickerCursorVisible()
 }
 
-// filterPicker keeps rows whose lowered text contains the lowered query and
-// keeps the parallel meta slice aligned with them.
-func filterPicker(
-	source, lowers []string,
-	metas []harnessSession.Meta,
-	query string,
-) ([]string, []harnessSession.Meta) {
+// filterPicker returns the indexes of the rows whose lowered search text
+// contains the lowered query.
+func filterPicker(lowers []string, query string) []int {
 	q := strings.ToLower(query)
-	out := make([]string, 0, len(source))
-	outMetas := make([]harnessSession.Meta, 0, len(metas))
+	keep := make([]int, 0, len(lowers))
 
-	for i, choice := range source {
-		lower := choice
-		if i < len(lowers) {
-			lower = lowers[i]
-		} else {
-			lower = strings.ToLower(choice)
-		}
-		if q != "" && !strings.Contains(lower, q) {
-			continue
-		}
-
-		out = append(out, choice)
-		if i < len(metas) {
-			outMetas = append(outMetas, metas[i])
+	for i, lower := range lowers {
+		if q == "" || strings.Contains(lower, q) {
+			keep = append(keep, i)
 		}
 	}
 
-	return out, outMetas
+	return keep
+}
+
+// pickRows returns rows[i] for each kept index, so the parallel row slices
+// stay aligned; indexes past the end of rows (no metas for models) are skipped.
+func pickRows[T any](rows []T, keep []int) []T {
+	out := make([]T, 0, len(keep))
+	for _, i := range keep {
+		if i < len(rows) {
+			out = append(out, rows[i])
+		}
+	}
+
+	return out
 }
 
 // pickerMaxScroll returns the largest valid picker scroll for the current rows.
@@ -354,24 +378,40 @@ func pickerIndexAt(c *clickTargets, x, y int) int {
 }
 
 // pickerRowText formats one row for the active picker kind.
-func pickerRowText(kind pickerKind, choice string, meta harnessSession.Meta) string {
-	if kind == pickerSession {
+func pickerRowText(kind pickerKind, choice string, meta harnessSession.Meta, turn harnessSession.UserTurn) string {
+	switch kind {
+	case pickerSession:
 		return fmt.Sprintf(
 			"%s  %s  %d messages  saved %s",
 			choice, meta.Model, meta.TotalUserMessages, meta.UpdatedAt.Format("2006-01-02 15:04"),
 		)
+
+	case pickerRewind:
+		return rewindRowText(turn)
 	}
 
 	return choice
 }
 
-// pickerMetaAt returns metas[i] or the zero meta when the slice is shorter.
-func pickerMetaAt(metas []harnessSession.Meta, i int) harnessSession.Meta {
-	if i >= 0 && i < len(metas) {
-		return metas[i]
+// rewindRowText is a /rewind row: the message number, then the message on
+// one line, cut to rewindPreviewMax runes.
+func rewindRowText(turn harnessSession.UserTurn) string {
+	preview := strings.Join(strings.Fields(turn.Content), " ")
+	if preview == "" {
+		preview = "(empty message)"
 	}
 
-	return harnessSession.Meta{}
+	return fmt.Sprintf("#%d  %s", turn.Number, truncateRunes(preview, rewindPreviewMax))
+}
+
+// rowAt returns rows[i], or the zero value when the slice is shorter.
+func rowAt[T any](rows []T, i int) T {
+	if i >= 0 && i < len(rows) {
+		return rows[i]
+	}
+
+	var zero T
+	return zero
 }
 
 // pickerCounter renders the position text shown at the right edge of the
@@ -424,9 +464,14 @@ func (m Model) pickerView() string {
 
 	header := "Select a model (↑/↓, Enter, Esc, click):"
 	placeholder := "search a model by typing on your keyboard"
-	if p.kind == pickerSession {
+	switch p.kind {
+	case pickerSession:
 		header = "Select a session (↑/↓, Enter, Esc, click):"
 		placeholder = "search a session by typing on your keyboard"
+
+	case pickerRewind:
+		header = "Select a message to rewind to (↑/↓, Enter, Esc, click):"
+		placeholder = "search a message by typing on your keyboard"
 	}
 
 	start := scroll
@@ -436,7 +481,7 @@ func (m Model) pickerView() string {
 	}
 	var rows []string
 	for i := start; i < end; i++ {
-		line := pickerRowText(p.kind, choices[i], pickerMetaAt(p.metas, i))
+		line := pickerRowText(p.kind, choices[i], rowAt(p.metas, i), rowAt(p.turns, i))
 		if i == p.cursor {
 			line = pickerSelectedStyle.Render("> " + line)
 		} else {
@@ -454,7 +499,7 @@ func (m Model) pickerView() string {
 		source = p.choices
 	}
 	for i, choice := range source {
-		line := pickerRowStyle.Render("  " + pickerRowText(p.kind, choice, pickerMetaAt(p.allMetas, i)))
+		line := pickerRowStyle.Render("  " + pickerRowText(p.kind, choice, rowAt(p.allMetas, i), rowAt(p.allTurns, i)))
 		if w := lipgloss.Width(line); w > innerWidth {
 			innerWidth = w
 		}

@@ -35,7 +35,11 @@ func (s *Session) Transcript() []TranscriptEntry {
 		return nil
 	}
 
-	entries := make([]TranscriptEntry, 0, len(s.Messages))
+	return transcriptOf(s.Messages)
+}
+
+func transcriptOf(messages []Message) []TranscriptEntry {
+	entries := make([]TranscriptEntry, 0, len(messages))
 	pending := make([]TranscriptEntry, 0, 4)
 	pendingNames := make([]string, 0, 4)
 
@@ -56,7 +60,7 @@ func (s *Session) Transcript() []TranscriptEntry {
 		return entry, name, true
 	}
 
-	for _, msg := range s.Messages {
+	for _, msg := range messages {
 		if msg.Role == "user" && isRetryNotice(msg.Content) {
 			continue
 		}

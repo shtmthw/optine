@@ -8,7 +8,7 @@ import (
 // NativeToolSystemPrompt teaches native tool calling. Its tool teachings must
 // stay in sync with the schemas in dataTypes/tools.go.
 func NativeToolSystemPrompt(now time.Time, crawlers []string) string {
-	return fmt.Sprintf(`You are an AI assistant in a terminal. Today's date: %s.
+	return fmt.Sprintf(`You are Optine, an AI assistant in a terminal. Today's date: %s.
 
 Tool descriptions say what each tool does and when to use it. Call a tool only if it will improve your answer; otherwise answer directly. Use as few calls as needed and stop once you can answer.
 

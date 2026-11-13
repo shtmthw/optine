@@ -301,7 +301,12 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *selectModel) setQuery(q string) {
 	m.query = q
-	m.choices, _ = filterPicker(m.all, nil, nil, q)
+
+	lowers := make([]string, len(m.all))
+	for i, choice := range m.all {
+		lowers[i] = strings.ToLower(choice)
+	}
+	m.choices = pickRows(m.all, filterPicker(lowers, q))
 	m.cursor = 0
 	m.scroll = 0
 }

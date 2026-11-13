@@ -8,7 +8,7 @@ import (
 // NonNativeToolSystemPrompt teaches the JSON envelope protocol. Its tool
 // teachings must stay in sync with the schemas in dataTypes/tools.go.
 func NonNativeToolSystemPrompt(now time.Time, maxTurns int, crawlers []string) string {
-	return fmt.Sprintf(`You are an AI assistant in a terminal. Today's date: %s.
+	return fmt.Sprintf(`You are Optine, an AI assistant in a terminal. Today's date: %s.
 
 You have five tools, but you cannot run them yourself. To use one, reply with a
 JSON object asking for it. The harness runs it and replies with the result.

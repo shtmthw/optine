@@ -35,6 +35,7 @@ var (
 	quit    = Command{Name: "/quit", Aliases: []string{"/exit", "/q"}, Description: "Exit optine"}
 
 	newSession  = Command{Name: "/new", Description: "Start a new, empty session in this directory"}
+	rewind      = Command{Name: "/rewind", Description: "Take the conversation and files back to before one of your messages"}
 	sessionQuit = Command{Name: "/quit", Aliases: []string{"/exit", "/q"}, Description: "Exit optine; ctrl+c returns to the launcher instead"}
 )
 
@@ -48,6 +49,7 @@ func For(scope Scope) []Command {
 			{Name: "/resume", Description: "Reopen a saved local session"},
 			{Name: "/revert", Description: "Restore the files changed by the latest request"},
 			{Name: "/redo", Description: "Put back the changes the last /revert undid"},
+			rewind,
 			help, funfact, sessionQuit,
 		}
 
@@ -58,6 +60,7 @@ func For(scope Scope) []Command {
 			{Name: "/resume", Description: "Reopen a saved remote session"},
 			{Name: "/revert", Description: "Restore the files changed by the latest request"},
 			{Name: "/redo", Description: "Put back the changes the last /revert undid"},
+			rewind,
 			help, funfact, sessionQuit,
 		}
 

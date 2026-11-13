@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/mattthew/optine/internal/harnessSession"
 )
 
@@ -58,6 +60,12 @@ func TranscriptMessages(entries []harnessSession.TranscriptEntry) []Message {
 	}
 
 	return tailMessages(messages)
+}
+
+// CommandMessage is a slash command's grey output box, for a command whose
+// AgentResult replaces the conversation and still reports what it did.
+func CommandMessage(command string, lines ...string) Message {
+	return Message{Role: roleCommand, Content: command + "\n" + strings.Join(lines, "\n")}
 }
 
 // tailMessages keeps the newest entries, retaining an oversized newest message.

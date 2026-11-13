@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -228,4 +229,29 @@ func PickSession(sessions []harnessSession.Meta) (string, bool) {
 		return "", false
 	}
 	return selected, true
+}
+
+// PickRewind opens the /rewind picker over the user's messages, listed in the
+// order given, and blocks until the user picks one or cancels. It returns the
+// picked message and whether one was picked.
+func PickRewind(turns []harnessSession.UserTurn) (harnessSession.UserTurn, bool) {
+	if len(turns) == 0 {
+		return harnessSession.UserTurn{}, false
+	}
+	prog := activeProgram
+	if prog == nil {
+		return harnessSession.UserTurn{}, false
+	}
+	result := make(chan string, 1)
+	prog.Send(pickerOpenMsg{kind: pickerRewind, turns: turns, result: result})
+	selected, ok := <-result
+	if !ok || selected == "" {
+		return harnessSession.UserTurn{}, false
+	}
+	for _, turn := range turns {
+		if strconv.Itoa(turn.Number) == selected {
+			return turn, true
+		}
+	}
+	return harnessSession.UserTurn{}, false
 }

@@ -61,7 +61,8 @@ OpenRouter model (set a key with /connect first). Typing / at the launcher or
 inside a session lists the commands available there. Inside the interface,
 /model switches models, /new starts an empty session, /resume reopens a saved
 session, /revert restores files from the latest run, /redo puts that run's
-changes back after a /revert, and /quit exits optine;
+changes back after a /revert, /rewind takes the conversation and files back
+to before one of your messages, and /quit exits optine;
 ctrl+c leaves the session and returns to the launcher. /help lists every
 command. Without a terminal (piped input), the launcher falls back to plain
 lines and numbered lists.
@@ -112,6 +113,17 @@ run's changes back.
 If the latest run has only a before snapshot or no snapshots at all, /revert
 leaves the working directory alone and reports that there is no complete pair
 to restore.
+
+## Rewinding
+
+/rewind opens a picker of the messages you sent in this session, newest
+first. Picking one cuts the conversation on screen back to just before it and
+puts that message back in the prompt, so you can edit and resend it. The files
+and the saved session are left alone until you send your next message; then
+every run from the picked message on is undone, newest first, the history is
+cut there and saved, and your message runs on the rewound conversation.
+Leaving or switching sessions before that discards the rewind. A run without a
+complete snapshot pair is reported and its files are left as they are.
 
 ## Approvals
 

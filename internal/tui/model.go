@@ -29,9 +29,12 @@ type AgentFunc func(
 
 // AgentResult is one agent turn. Non-nil Messages replaces the visible
 // conversation; /resume and /restore use it to swap sessions atomically.
+// Input, when set, goes into the input line if the user has not typed there
+// meanwhile; /rewind uses it to hand back the message it rewound past.
 type AgentResult struct {
 	Response string
 	Messages []Message
+	Input    string
 }
 
 // Roles a Message can have.
@@ -194,6 +197,7 @@ type escExpiredMsg struct {
 type agentFinishedMsg struct {
 	response string
 	swap     []Message
+	input    string
 	err      error
 }
 
@@ -450,6 +454,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    roleAgent,
 				Content: msg.response,
 			})
+		}
+
+		if msg.input != "" && m.input == "" {
+			m.input = string(promptSafe([]rune(msg.input)))
+			m.cursor = runeLen(m.input)
+			m.palette.reset()
 		}
 
 		m.cache.invalidate()
@@ -1460,6 +1470,7 @@ func runAgent(
 		return agentFinishedMsg{
 			response: result.Response,
 			swap:     result.Messages,
+			input:    result.Input,
 			err:      err,
 		}
 	}

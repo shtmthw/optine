@@ -195,6 +195,12 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 	launcherOut.info("session %s · %s · %s · %s", sess.UID, providerName, modelName, sess.Directory)
 
 	configDir := filepath.Dir(harnessPermissions.AuthPath)
+
+	// pendingRewind is the message number /rewind picked (0 if none). The view
+	// is already cut there; the files and the saved history are rewound
+	// before the next message runs.
+	pendingRewind := 0
+
 	agent := func(ctx context.Context, modelProvider string, modelName string, msg string, r *bufio.Reader) (tui.AgentResult, error) {
 		msg = strings.TrimSpace(msg)
 
@@ -315,6 +321,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 				return tui.AgentResult{}, nil
 			}
 			sess = newSess
+			pendingRewind = 0
 			notifyModelChanged(sess.Provider, sess.Model, sess.UID)
 
 			return tui.AgentResult{
@@ -334,6 +341,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			}
 
 			sess = next
+			pendingRewind = 0
 
 			agentConf.Provider = sess.Provider
 			agentConf.Model = sess.Model
@@ -353,9 +361,24 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			return tui.AgentResult{}, nil
 		}
 
+		// The picker cuts the view at once; the rewind itself waits for the
+		// next message (see rewind.go).
+		if msg == "/rewind" {
+			var result tui.AgentResult
+			pendingRewind, result = openRewind(sess, pendingRewind)
+			return result, nil
+		}
+
 		if strings.HasPrefix(msg, "/") {
 			RunCommand(msg, true, r)
 			return tui.AgentResult{}, nil
+		}
+
+		if pendingRewind > 0 {
+			if err := applyRewind(sess, configDir, pendingRewind); err != nil {
+				return tui.AgentResult{}, fmt.Errorf("rewind failed, so the message was not sent; send it again to retry, or /resume to drop the rewind: %w", err)
+			}
+			pendingRewind = 0
 		}
 
 		answer, err := harnessCore.AgentLoop(ctx, sess, agentConf, msg, r)
