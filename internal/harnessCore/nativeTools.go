@@ -109,7 +109,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
 		if sess.Compacted {
-			err = postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*&reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
+			err = postJSON(ctx, ollamaChatURL, produceOllamaReqBody(reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
 
 		} else {
 			err = postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
@@ -125,7 +125,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
 
 				if sess.Compacted {
-					*&reSess.Messages = append(*&reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
+					reSess.Messages = append(reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
 				}
 
 				continue
@@ -145,7 +145,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			// Persist the final answer too.
 			*history = append(*history, reply)
 			if sess.Compacted {
-				*&reSess.Messages = append(*&reSess.Messages, reply)
+				reSess.Messages = append(reSess.Messages, reply)
 			}
 			return reply.Content, nil
 		}
@@ -172,7 +172,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		turns = extendTurns(turns)
 		*history = append(*history, block...)
 		if sess.Compacted {
-			*&reSess.Messages = append(*&reSess.Messages, block...)
+			reSess.Messages = append(reSess.Messages, block...)
 		}
 
 		// The run goes on with another request; compact first if the last
@@ -197,7 +197,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		var response dataTypes.OpenAIChatResponse
 
 		if sess.Compacted {
-			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*&reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
+			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
 		} else {
 			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
 		}
@@ -212,7 +212,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				log.Printf("openai turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
 				if sess.Compacted {
-					*&reSess.Messages = append(*&reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
+					reSess.Messages = append(reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
 				}
 				continue
 			}
@@ -236,7 +236,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			log.Printf("openai turn %d: malformed tool arguments (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 			*history = append(*history, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
 			if sess.Compacted {
-				*&reSess.Messages = append(*&reSess.Messages, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
+				reSess.Messages = append(reSess.Messages, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
 			}
 			continue
 		}
@@ -253,7 +253,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			// Persist the final answer too.
 			*history = append(*history, reply)
 			if sess.Compacted {
-				*&reSess.Messages = append(*&reSess.Messages, reply)
+				reSess.Messages = append(reSess.Messages, reply)
 			}
 			return reply.Content, nil
 		}
@@ -281,7 +281,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		turns = extendTurns(turns)
 		*history = append(*history, block...)
 		if sess.Compacted {
-			*&reSess.Messages = append(*&reSess.Messages, block...)
+			reSess.Messages = append(reSess.Messages, block...)
 		}
 
 		// The run goes on with another request; compact first if the last
