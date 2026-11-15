@@ -183,17 +183,27 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			}
 			return "", err
 		}
-		badBodies = 0
 		sess.RecordPromptTokens(response.Usage.PromptTokens)
 
 		if len(response.Choices) == 0 {
 			return "", ErrNoChoices
 		}
 
+		// Tool arguments arrive as a JSON string the model wrote itself, so a
+		// broken one counts against the same malformed budget as a bad body.
 		reply, arguments, err := messageFromOpenAI(response.Choices[0].Message)
 		if err != nil {
-			return "", err
+			_, abort := handleMalformedBody(&badBodies, fmt.Errorf("%w: %w", ErrMalformedJSON, err))
+			if abort != nil {
+				return "", abort
+			}
+			turns = extendTurns(turns)
+			log.Printf("openai turn %d: malformed tool arguments (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
+			*history = append(*history, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
+			continue
 		}
+		// Reset only once both the body and the tool arguments decoded.
+		badBodies = 0
 
 		// A tool-calling turn carries empty content, so tool calls have to be
 		// checked before treating empty content as an error.
@@ -298,6 +308,19 @@ func decodeOpenAIArguments(raw string) (map[string]any, error) {
 	}
 
 	return arguments, nil
+}
+
+// correctionForBadToolArguments builds the retry instruction for a tool call
+// whose arguments were not valid JSON.
+func correctionForBadToolArguments(err error) string {
+	detail := err.Error()
+	if runes := []rune(detail); len(runes) > maxEnvelopeExcerpt {
+		detail = string(runes[:maxEnvelopeExcerpt])
+	}
+	return fmt.Sprintf(
+		"Your last tool call was not usable: its arguments were not valid JSON (%s). Re-issue the tool call with arguments as a single valid JSON object.",
+		detail,
+	)
 }
 
 func produceOllamaReqBody(messages []harnessSession.Message, modelName string, systemPrompt string, effort effortWire) dataTypes.NativeToolChatRequest {

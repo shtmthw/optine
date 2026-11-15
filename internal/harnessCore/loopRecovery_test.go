@@ -138,3 +138,57 @@ func TestNonNativeMalformedHTTPBodyRecovers(t *testing.T) {
 		})
 	}
 }
+
+// badArgumentsToolCall is a well-formed OpenAI body whose tool-call arguments
+// string is truncated JSON.
+const badArgumentsToolCall = `{"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\": \"main.go\""}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1}}`
+
+const openAIFinalAnswer = `{"choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1}}`
+
+func TestOpenAIBadToolArgumentsRecovers(t *testing.T) {
+	calls := scriptedJSONServer(t, &vLLMChatURL, func(call int64) string {
+		if call <= 2 {
+			return badArgumentsToolCall
+		}
+		return openAIFinalAnswer
+	})
+
+	sess := testSession(t, harnessSession.OpenAICompatNative)
+	reader := bufio.NewReader(strings.NewReader(""))
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", sess, vLLMChatURL, "")
+	if err != nil {
+		t.Fatalf("want recovery with answer, got error: %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("want %q, got %q", "done", out)
+	}
+	if got := atomic.LoadInt64(calls); got != 3 {
+		t.Fatalf("want 3 provider calls (2 corrections + success), got %d", got)
+	}
+
+	corrections := 0
+	for _, msg := range sess.Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "arguments were not valid JSON") {
+			corrections++
+		}
+		if len(msg.ToolCalls) > 0 {
+			t.Fatalf("broken tool call leaked into history: %+v", msg)
+		}
+	}
+	if corrections != 2 {
+		t.Fatalf("want 2 argument corrections in history, got %d", corrections)
+	}
+}
+
+func TestOpenAIBadToolArgumentsAbortAfterBudget(t *testing.T) {
+	calls := scriptedJSONServer(t, &vLLMChatURL, func(int64) string { return badArgumentsToolCall })
+
+	reader := bufio.NewReader(strings.NewReader(""))
+	_, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
+	if !errors.Is(err, ErrMalformedJSON) {
+		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
+	}
+	if got := atomic.LoadInt64(calls); got != maxBadBodies+1 {
+		t.Fatalf("want %d provider calls (1 + %d retries), got %d", maxBadBodies+1, maxBadBodies, got)
+	}
+}
