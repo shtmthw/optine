@@ -40,6 +40,8 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		Message{Role: "assistant", Content: "done"},
 	)
 	sess.RecordPromptTokens(42)
+	sess.Compacted = true
+	sess.Compaction = Compaction{Summary: "The agent is implementing...", ThroughTurn: 40}
 
 	if err := Commit(sess); err != nil {
 		t.Fatalf("commit: %v", err)
@@ -54,6 +56,16 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"tool_call": true`) {
 		t.Fatalf("session file missing tool_call: %s", raw)
+	}
+	for _, want := range []string{
+		`"compacted": true`,
+		`"compaction":`,
+		`"summary": "The agent is implementing..."`,
+		`"throughTurn": 40`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("session file missing %s: %s", want, raw)
+		}
 	}
 	if !strings.Contains(string(raw), `"messages":`) {
 		t.Fatalf("session file missing unified messages array: %s", raw)
@@ -78,6 +90,9 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	if !metas[0].ToolCall {
 		t.Fatal("tool call lost in listing")
 	}
+	if !metas[0].Compacted || metas[0].Compaction.ThroughTurn != 40 {
+		t.Fatalf("compaction metadata lost in listing: %+v", metas[0])
+	}
 	if metas[0].TotalUserMessages != 1 {
 		t.Fatalf("user message count lost in listing: %d", metas[0].TotalUserMessages)
 	}
@@ -95,6 +110,9 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	}
 	if !loaded.ToolCall {
 		t.Fatal("tool call lost on load")
+	}
+	if !loaded.Compacted || loaded.Compaction.Summary != "The agent is implementing..." || loaded.Compaction.ThroughTurn != 40 {
+		t.Fatalf("compaction metadata lost on load: %+v", loaded.Compaction)
 	}
 	if loaded.TotalUserMessages != 1 {
 		t.Fatalf("user message count lost on load: %d", loaded.TotalUserMessages)
@@ -143,6 +161,61 @@ func TestCommitSkipsZeroRunSession(t *testing.T) {
 
 	if len(entries) != 0 {
 		t.Fatalf("a session that never ran must not be persisted, found %d files", len(entries))
+	}
+}
+
+// TestCompactionMetadataDefaultsToEmpty proves a fresh session writes no
+// compaction keys and a session file saved before them loads with zero values.
+func TestCompactionMetadataDefaultsToEmpty(t *testing.T) {
+	dir := stubSessionsDir(t)
+
+	memory := ""
+	crawlers := []string{"searxng"}
+	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
+
+	sess := New(Config{Provider: "Ollama", Model: "m", Kind: OllamaNative})
+	if sess.Compacted || sess.Compaction != (Compaction{}) {
+		t.Fatalf("new session is already compacted: compacted=%v compaction=%+v", sess.Compacted, sess.Compaction)
+	}
+
+	sess.BeginRun()
+	sess.AppendUser("hello")
+	if err := Commit(sess); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, sess.UID+".json"))
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	if strings.Contains(string(raw), `"compacted"`) || strings.Contains(string(raw), `"compaction"`) {
+		t.Fatalf("uncompacted session wrote compaction keys: %s", raw)
+	}
+
+	// A file saved before the fields existed omits both keys.
+	legacy := sessionFile{
+		UID:      "legacy",
+		Kind:     OllamaNative,
+		Provider: "Ollama",
+		Model:    "m",
+		RunCount: 1,
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	}
+
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "legacy.json"), data, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	loaded, err := Load("legacy")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Compacted || loaded.Compaction != (Compaction{}) {
+		t.Fatalf("legacy session did not default to empty compaction: compacted=%v compaction=%+v", loaded.Compacted, loaded.Compaction)
 	}
 }
 

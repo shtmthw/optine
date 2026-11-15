@@ -40,7 +40,7 @@ func TestOllamaLoopPersistsFinalAnswer(t *testing.T) {
 	sess.BeginRun()
 	sess.AppendUser("hi")
 
-	out, err := ollamaToolLoop(context.Background(), reader, "test-model", sess)
+	out, err := ollamaToolLoop(context.Background(), reader, "test-model", nil, sess, nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestVLLMLoopPersistsFinalAnswer(t *testing.T) {
 	sess.BeginRun()
 	sess.AppendUser("hi")
 
-	out, err := openAiToolLoop(context.Background(), reader, "test-model", sess, vLLMChatURL, "")
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", nil, sess, vLLMChatURL, "", nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestEnvelopeLoopPersistsFinalAnswer(t *testing.T) {
 	sess.BeginRun()
 	sess.AppendUser("hi")
 
-	out, err := nonNativeAgentCall(context.Background(), sess, reader, "Ollama", "test-model")
+	out, err := NonNativeAgentCall(context.Background(), sess, reader, "Ollama", "test-model")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}

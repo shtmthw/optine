@@ -78,6 +78,7 @@ const (
 
 	escHint          = "press esc again to interrupt"
 	interruptingText = "interrupting... saving session"
+	compactingText   = "compacting..."
 
 	// promptPlaceholder fills the empty prompt with the key hints.
 	promptPlaceholder = "/ for commands · esc twice to interrupt · alt+c copy reply · pgup/pgdn scroll"
@@ -122,6 +123,10 @@ type Model struct {
 	// memory (Ollama) to read its context length.
 	modelLoading bool
 	loadingModel string
+
+	// compacting swaps the busy spinner's text for "compacting..." while the
+	// session is being compacted (/compact, auto, or in the middle of a run).
+	compacting bool
 
 	approvalCh      chan<- string
 	pendingApproval bool
@@ -267,6 +272,19 @@ type modelLoadingMsg struct {
 func NotifyModelLoading(active bool, model string) {
 	if activeProgram != nil {
 		activeProgram.Send(modelLoadingMsg{active: active, model: model})
+	}
+}
+
+// compactingMsg toggles the "compacting..." spinner text.
+type compactingMsg struct {
+	active bool
+}
+
+// NotifyCompacting tells the active TUI that a session compaction started or
+// ended, so the spinner says "compacting..." instead of "thinking..." meanwhile.
+func NotifyCompacting(active bool) {
+	if activeProgram != nil {
+		activeProgram.Send(compactingMsg{active: active})
 	}
 }
 
@@ -440,6 +458,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commandRun = ""
 		m.commandMsg = -1
 		m.busy = false
+		m.compacting = false
 		m.pendingApproval = false
 		m.hovered = ""
 		m.escArmed = false
@@ -537,6 +556,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.model != "" {
 			m.loadingModel = msg.model
 		}
+
+	case compactingMsg:
+		m.compacting = msg.active
 
 	case pickerOpenMsg:
 		m.openPicker(msg)
@@ -1221,15 +1243,21 @@ func (m Model) historyLines() ([]string, int) {
 		spinner := loadingStyle.Render(spinnerFrames[m.spinnerFrame] + " loading " + m.loadingModel + "...")
 		lines = append(lines[:len(lines):len(lines)], spinner, "")
 	} else if m.busy {
+		// Compaction shows in the loader's yellow so it stands out from an
+		// ordinary thinking spinner.
+		working := statusStyle.Render(spinnerFrames[m.spinnerFrame] + " thinking...")
+		if m.compacting {
+			working = loadingStyle.Render(spinnerFrames[m.spinnerFrame] + " " + compactingText)
+		}
+
 		var spinner string
 		switch {
 		case m.interrupting:
 			spinner = loadingStyle.Render(spinnerFrames[m.spinnerFrame] + " " + interruptingText)
 		case m.escArmed:
-			spinner = statusStyle.Render(spinnerFrames[m.spinnerFrame]+" thinking...") +
-				"  " + loadingStyle.Render(escHint)
+			spinner = working + "  " + loadingStyle.Render(escHint)
 		default:
-			spinner = statusStyle.Render(spinnerFrames[m.spinnerFrame] + " thinking...")
+			spinner = working
 		}
 		lines = append(lines[:len(lines):len(lines)], spinner, "")
 	}

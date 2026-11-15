@@ -189,7 +189,16 @@ func correctionForBadEnvelope(raw string) string {
 
 type nonNativeChat func(ctx context.Context, messages []harnessSession.Message, modelName, systemPrompt, chatURL, apiKey string, effort effortWire) (*dataTypes.NonNativeMessage, int, error)
 
-func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
+// NonNativeAgentCall runs the envelope loop on sess's own history, for callers
+// that have no reconstructed session (compaction's one-off summary run).
+func NonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
+	return nonNativeAgentCall(ctx, nil, sess, reader, provider, modelName, nil)
+}
+
+// nonNativeAgentCall is the envelope loop. Once sess is compacted, the model is
+// sent reSess's history (summary + recent turns) and every message added to
+// sess is added to reSess too, the same way the native loops do it.
+func nonNativeAgentCall(ctx context.Context, reSess, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string, compact CompactFunc) (string, error) {
 
 	var chat nonNativeChat
 	var chatURL, apiKey string
@@ -216,10 +225,26 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 	history := &sess.Messages
 	effort := wireEffort(provider, sess.EffortSupport, sess.Effort)
 
+	// A compacted session without its reconstructed view falls back to the
+	// full history instead of dereferencing nil.
+	compacted := sess.Compacted && reSess != nil
+
+	// mirror copies the last n messages just added to history into reSess.
+	mirror := func(n int) {
+		if compacted {
+			reSess.Messages = append(reSess.Messages, (*history)[len(*history)-n:]...)
+		}
+	}
+
 	turns := baseTurns
 	badBodies := 0
+	triedCompact := false
 	for turn := 0; turn < turns; turn++ {
-		reply, promptTokens, err := chat(ctx, *history, modelName, sess.SystemPrompt, chatURL, apiKey, effort)
+		messages := *history
+		if compacted {
+			messages = reSess.Messages
+		}
+		reply, promptTokens, err := chat(ctx, messages, modelName, sess.SystemPrompt, chatURL, apiKey, effort)
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, fmt.Errorf("malformed HTTP body from %s: %w", provider, err))
@@ -232,6 +257,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 					Role:    "user",
 					Content: correction,
 				})
+				mirror(1)
 				continue
 			}
 			return "", err
@@ -250,6 +276,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 				Role:    "user",
 				Content: correctionForBadEnvelope(reply.Content),
 			})
+			mirror(1)
 			continue
 		}
 		badBodies = 0
@@ -258,6 +285,7 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 		case "final_answer":
 			// Keep the assistant envelope in the transcript.
 			*history = append(*history, harnessSession.Message{Role: reply.Role, Content: reply.Content})
+			mirror(1)
 
 			return aiResponse.Content, nil
 
@@ -282,8 +310,15 @@ func nonNativeAgentCall(ctx context.Context, sess *harnessSession.Session, reade
 					),
 				},
 			)
+			mirror(2)
 
 			turns = extendTurns(turns)
+
+			// The run goes on with another request; compact first if the
+			// last one filled most of the context window. A first compaction
+			// turns the reconstructed view on from here.
+			reSess = midRunCompact(sess, reSess, compact, &triedCompact)
+			compacted = sess.Compacted && reSess != nil
 
 		default:
 			return "", fmt.Errorf(

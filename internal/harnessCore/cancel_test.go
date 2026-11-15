@@ -16,14 +16,14 @@ import (
 
 func TestOllamaToolLoopCancellation(t *testing.T) {
 	runCancellationTest(t, &ollamaChatURL, func(ctx context.Context, reader *bufio.Reader) error {
-		_, err := ollamaToolLoop(ctx, reader, "test-model", testSession(t, harnessSession.OllamaNative))
+		_, err := ollamaToolLoop(ctx, reader, "test-model", nil, testSession(t, harnessSession.OllamaNative), nil)
 		return err
 	})
 }
 
 func TestNonNativeLoopCancellation(t *testing.T) {
 	runCancellationTest(t, &ollamaChatURL, func(ctx context.Context, reader *bufio.Reader) error {
-		_, err := nonNativeAgentCall(ctx, testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
+		_, err := NonNativeAgentCall(ctx, testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
 		return err
 	})
 }

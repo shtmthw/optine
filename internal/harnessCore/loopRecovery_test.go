@@ -48,7 +48,7 @@ func garbageServer(t *testing.T, urlVar *string) *int64 {
 func TestOllamaMalformedBodiesAbortAfterBudget(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	calls := garbageServer(t, &ollamaChatURL)
-	_, err := ollamaToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OllamaNative))
+	_, err := ollamaToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OllamaNative), nil)
 	if !errors.Is(err, ErrMalformedJSON) {
 		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestOllamaMalformedBodiesAbortAfterBudget(t *testing.T) {
 func TestVLLMMalformedBodiesAbortAfterBudget(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(""))
 	calls := garbageServer(t, &vLLMChatURL)
-	_, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
+	_, err := openAiToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "", nil)
 	if !errors.Is(err, ErrMalformedJSON) {
 		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestNonNativeMalformedHTTPBodyAbortsAfterBudget(t *testing.T) {
 
 			reader := bufio.NewReader(strings.NewReader(""))
 			calls := garbageServer(t, urlVar)
-			_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, provider, "test-model")
+			_, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, provider, "test-model")
 			if !errors.Is(err, ErrMalformedJSON) {
 				t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 			}
@@ -119,7 +119,7 @@ func TestNonNativeMalformedHTTPBodyRecovers(t *testing.T) {
 
 			sess := testSession(t, harnessSession.Envelope)
 			reader := bufio.NewReader(strings.NewReader(""))
-			out, err := nonNativeAgentCall(context.Background(), sess, reader, provider, "test-model")
+			out, err := NonNativeAgentCall(context.Background(), sess, reader, provider, "test-model")
 			if err != nil {
 				t.Fatalf("want recovery with answer, got error: %v", err)
 			}
@@ -155,7 +155,7 @@ func TestOpenAIBadToolArgumentsRecovers(t *testing.T) {
 
 	sess := testSession(t, harnessSession.OpenAICompatNative)
 	reader := bufio.NewReader(strings.NewReader(""))
-	out, err := openAiToolLoop(context.Background(), reader, "test-model", sess, vLLMChatURL, "")
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", nil, sess, vLLMChatURL, "", nil)
 	if err != nil {
 		t.Fatalf("want recovery with answer, got error: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestOpenAIBadToolArgumentsAbortAfterBudget(t *testing.T) {
 	calls := scriptedJSONServer(t, &vLLMChatURL, func(int64) string { return badArgumentsToolCall })
 
 	reader := bufio.NewReader(strings.NewReader(""))
-	_, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
+	_, err := openAiToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "", nil)
 	if !errors.Is(err, ErrMalformedJSON) {
 		t.Fatalf("want abort wrapping ErrMalformedJSON, got: %v", err)
 	}

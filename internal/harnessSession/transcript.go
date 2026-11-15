@@ -27,6 +27,7 @@ type TranscriptEntry struct {
 const (
 	nativeRetryPrefix   = "Your last reply wasn't usable JSON"
 	envelopeRetryPrefix = "Your last reply was not a valid tool-call envelope."
+	toolArgsRetryPrefix = "Your last tool call was not usable:"
 )
 
 // Transcript projects stored history into user, assistant and tool messages.
@@ -184,7 +185,8 @@ func isRetryNotice(content string) bool {
 	content = strings.TrimSpace(content)
 
 	return strings.HasPrefix(content, nativeRetryPrefix) ||
-		strings.HasPrefix(content, envelopeRetryPrefix)
+		strings.HasPrefix(content, envelopeRetryPrefix) ||
+		strings.HasPrefix(content, toolArgsRetryPrefix)
 }
 
 func stripEnvelopeFences(raw string) string {

@@ -481,6 +481,37 @@ func TestModelLoadingTicksSpinner(t *testing.T) {
 	}
 }
 
+// While a compaction runs, the busy spinner says "compacting..." instead of
+// "thinking...", and goes back when the compaction or the run ends.
+func TestViewShowsCompactingSpinner(t *testing.T) {
+	m := newTestModel()
+	m, _ = update(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.busy = true
+	m, _ = update(m, compactingMsg{active: true})
+
+	view := m.View()
+	if !strings.Contains(view, compactingText) {
+		t.Fatal("compaction should show the compacting spinner")
+	}
+	if strings.Contains(view, "thinking...") {
+		t.Fatal("compaction should replace the thinking spinner")
+	}
+
+	// Mid-run compaction: the run carries on afterwards.
+	m, _ = update(m, compactingMsg{active: false})
+	view = m.View()
+	if strings.Contains(view, compactingText) || !strings.Contains(view, "thinking...") {
+		t.Fatal("a finished compaction should fall back to the thinking spinner")
+	}
+
+	// A run that ends while compacting clears the state for the next one.
+	m, _ = update(m, compactingMsg{active: true})
+	m, _ = update(m, agentFinishedMsg{})
+	if m.compacting {
+		t.Fatal("a finished run should clear the compacting state")
+	}
+}
+
 // ---------------------------------------------------------------- pickers
 
 // openTestPicker applies a pickerOpenMsg and returns the updated model.

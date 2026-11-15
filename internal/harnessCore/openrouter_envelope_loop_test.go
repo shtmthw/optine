@@ -100,7 +100,7 @@ func TestOpenRouterEnvelopeLoopToolCallRoundTrip(t *testing.T) {
 	sess.BeginRun()
 	sess.AppendUser("hi")
 
-	out, err := nonNativeAgentCall(context.Background(), sess, bufio.NewReader(strings.NewReader("")), "Openrouter", "test-model")
+	out, err := NonNativeAgentCall(context.Background(), sess, bufio.NewReader(strings.NewReader("")), "Openrouter", "test-model")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestOpenRouterEnvelopeLoopRequiresKey(t *testing.T) {
 	harnessPermissions.AuthPath = authPath
 	t.Cleanup(func() { harnessPermissions.AuthPath = old })
 
-	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), bufio.NewReader(strings.NewReader("")), "Openrouter", "test-model")
+	_, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), bufio.NewReader(strings.NewReader("")), "Openrouter", "test-model")
 	if err == nil || !strings.Contains(err.Error(), "openrouter") {
 		t.Fatalf("want missing-key error naming openrouter, got: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestOpenRouterEnvelopeLoopRateLimited(t *testing.T) {
 	openRouterChatURL = srv.URL
 	t.Cleanup(func() { openRouterChatURL = old })
 
-	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), bufio.NewReader(strings.NewReader("")), "Openrouter", "test-model")
+	_, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), bufio.NewReader(strings.NewReader("")), "Openrouter", "test-model")
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("want ErrRateLimited, got: %v", err)
 	}

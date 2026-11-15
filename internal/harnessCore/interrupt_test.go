@@ -40,9 +40,9 @@ func interruptEnv(t *testing.T) *harnessSession.Session {
 }
 
 func runAgentLoop(ctx context.Context, sess *harnessSession.Session, msg string) (string, error) {
-	return AgentLoop(ctx, sess,
+	return AgentLoop(ctx, nil, sess,
 		dataTypes.AgentConfig{Provider: "Ollama", Model: "test-model", NativeToolCalling: true},
-		msg, bufio.NewReader(strings.NewReader("")))
+		msg, bufio.NewReader(strings.NewReader("")), nil)
 }
 
 // Interrupting while the provider is still thinking aborts the request,
@@ -250,9 +250,9 @@ func TestEnvelopeLoopInterruptDuringToolCommitsHistory(t *testing.T) {
 	})
 	t.Cleanup(func() { harnessSession.SetDisplayEventListener(nil) })
 
-	_, err := AgentLoop(ctx, sess,
+	_, err := AgentLoop(ctx, nil, sess,
 		dataTypes.AgentConfig{Provider: "Ollama", Model: "test-model", NativeToolCalling: false},
-		"run a command", bufio.NewReader(strings.NewReader("")))
+		"run a command", bufio.NewReader(strings.NewReader("")), nil)
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatalf("err = %v, want ErrInterrupted", err)
 	}
@@ -288,9 +288,9 @@ func TestEnvelopeLoopInterruptDuringToolCommitsHistory(t *testing.T) {
 
 	// The next message continues the envelope history after the marker.
 	fakeChatServer(t, `{"message":{"role":"assistant","content":"{\"type\":\"final_answer\",\"content\":\"resumed\"}"}}`)
-	answer, err := AgentLoop(context.Background(), loaded,
+	answer, err := AgentLoop(context.Background(), nil, loaded,
 		dataTypes.AgentConfig{Provider: "Ollama", Model: "test-model", NativeToolCalling: false},
-		"carry on", bufio.NewReader(strings.NewReader("")))
+		"carry on", bufio.NewReader(strings.NewReader("")), nil)
 	if err != nil || answer != "resumed" {
 		t.Fatalf("follow-up run: answer=%q err=%v", answer, err)
 	}
@@ -317,9 +317,9 @@ func TestEnvelopeLoopInterruptDuringInferenceCommitsHistory(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := AgentLoop(ctx, sess,
+		_, err := AgentLoop(ctx, nil, sess,
 			dataTypes.AgentConfig{Provider: "Ollama", Model: "test-model", NativeToolCalling: false},
-			"long task", bufio.NewReader(strings.NewReader("")))
+			"long task", bufio.NewReader(strings.NewReader("")), nil)
 		done <- err
 	}()
 

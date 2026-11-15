@@ -17,8 +17,14 @@ import (
 // ErrInterrupted is returned by AgentLoop when the user stopped the run.
 var ErrInterrupted = fmt.Errorf("run interrupted by user: %w", context.Canceled)
 
+// CompactFunc compacts the session in the middle of a run and returns the
+// reconstructed session the run should continue with (the one it already had
+// if nothing was compacted). Compaction lives in the cli package, so the caller
+// supplies it; nil turns mid-run compaction off.
+type CompactFunc func() *harnessSession.Session
+
 // AgentLoop runs one user message against the session's history.
-func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader) (string, error) {
+func AgentLoop(ctx context.Context, reSess, sess *harnessSession.Session, agentConfig dataTypes.AgentConfig, userMessage string, reader *bufio.Reader, compact CompactFunc) (string, error) {
 
 	// kind agnostic.
 	sess.Kind = harnessSession.KindFor(agentConfig.Provider, agentConfig.NativeToolCalling)
@@ -56,6 +62,20 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 
 	sess.AppendUser(userMessage)
 
+	if sess.Compacted {
+		reSess.AppendUser(userMessage)
+	}
+
+	// A mid-run compaction builds a new reconstructed session; follow it, so
+	// the interrupt notice below goes to the one the run ended on.
+	if compact != nil {
+		callerCompact := compact
+		compact = func() *harnessSession.Session {
+			reSess = callerCompact()
+			return reSess
+		}
+	}
+
 	var (
 		result string
 		err    error
@@ -63,10 +83,10 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 
 	switch agentConfig.NativeToolCalling {
 	case true:
-		result, err = nativeToolAgentCall(ctx, sess, reader, agentConfig.Provider, agentConfig.Model)
+		result, err = NativeToolAgentCall(ctx, reSess, sess, reader, agentConfig.Provider, agentConfig.Model, compact)
 
 	case false:
-		result, err = nonNativeAgentCall(ctx, sess, reader, agentConfig.Provider, agentConfig.Model)
+		result, err = nonNativeAgentCall(ctx, reSess, sess, reader, agentConfig.Provider, agentConfig.Model, compact)
 	}
 
 	interrupted := errors.Is(err, context.Canceled) || (err != nil && ctx.Err() != nil)
@@ -74,6 +94,9 @@ func AgentLoop(ctx context.Context, sess *harnessSession.Session, agentConfig da
 		// History already holds every completed turn (tool blocks are appended whole, with a result for every call).
 		// Mark the cut so the model knows on the next message that this run did not finish.
 		sess.AppendInterrupted()
+		if sess.Compacted {
+			reSess.AppendInterrupted()
+		}
 	}
 
 	commitErr := harnessSession.Commit(sess)

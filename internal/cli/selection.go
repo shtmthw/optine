@@ -165,6 +165,8 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 		NativeToolCalling: nativeToolCalling,
 	}
 
+	var reconstructedSession *harnessSession.Session
+
 	sess, err := sessionForRun(harnessSession.Config{
 		Provider:     providerName,
 		Model:        modelName,
@@ -185,6 +187,17 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 	scope := slashCommands.RemoteSession
 	if sess.LocalOnly {
 		scope = slashCommands.LocalSession
+	}
+
+	// compacted session reconstruction here
+	if sess.Compacted {
+		//reconstruct in-memory session
+		reSess, err := harnessSession.ReconstructSession(sess)
+		if err != nil {
+			return err
+		}
+		reconstructedSession = reSess
+
 	}
 
 	var initialMessages []tui.Message
@@ -210,6 +223,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 	// is already cut there; the files and the saved history are rewound
 	// before the next message runs.
 	pendingRewind := 0
+	JustCompacted := false
 
 	agent := func(ctx context.Context, modelProvider string, modelName string, msg string, r *bufio.Reader) (tui.AgentResult, error) {
 		msg = strings.TrimSpace(msg)
@@ -253,7 +267,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 				ctxLimit, ctxErr := provider.VLLMGetModelContextLength(ctx)
 				if ctxErr != nil || ctxLimit <= 0 {
 					log.Printf("vLLM context window probe failed: %v", ctxErr)
-					ctxLimit = 4096
+					ctxLimit = harnessSession.DefaultContextLimit
 				}
 				modelProviders[modelName] = "vLLM"
 				modelToolSupport[modelName] = hasTools
@@ -288,7 +302,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 					ctxLimit = modelContextLimits[selected]
 				}
 				if ctxLimit <= 0 {
-					ctxLimit = 4096
+					ctxLimit = harnessSession.DefaultContextLimit
 				}
 
 				sess.ContextLimit = ctxLimit
@@ -340,6 +354,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			newSess.EffortSupport = sess.EffortSupport
 			sess = newSess
 			pendingRewind = 0
+			JustCompacted = false
 			notifyModelChanged(sess.Provider, sess.Model, sess.UID)
 
 			return tui.AgentResult{
@@ -358,8 +373,27 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 				return tui.AgentResult{}, nil
 			}
 
+			// Rebuild before switching, so a failed rebuild leaves the current
+			// session fully in place.
+			var nextReSess *harnessSession.Session
+			if next.Compacted {
+				reSess, err := harnessSession.ReconstructSession(next)
+				if err != nil {
+					log.Printf("cannot resume session %s: %v", next.UID, err)
+					// resumeSession already pointed the header at next; point it back.
+					if harnessSession.OnActiveSession != nil {
+						harnessSession.OnActiveSession(sess.UID)
+					}
+					notifyModelChanged(sess.Provider, sess.Model, sess.UID)
+					return tui.AgentResult{}, nil
+				}
+				nextReSess = reSess
+			}
+
 			sess = next
+			reconstructedSession = nextReSess
 			pendingRewind = 0
+			JustCompacted = false
 
 			agentConf.Provider = sess.Provider
 			agentConf.Model = sess.Model
@@ -398,6 +432,22 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			}
 			return tui.AgentResult{}, nil
 		}
+		if msg == "/compact" {
+			if sess.TotalUserMessages <= 0 || JustCompacted {
+				log.Println("Can not compact a session with no messages or if just compacted.")
+				return tui.AgentResult{}, nil
+
+			}
+			// step: 1 run session compaction
+			err := compactAndReconstructSession(&reconstructedSession, sess, agentConf.NativeToolCalling, agentConf.Provider, agentConf.Model, ctx, r, &JustCompacted)
+
+			if err != nil {
+				return logErrResult(err)
+			}
+			log.Println("Session Compacted.")
+			return tui.AgentResult{}, nil
+
+		}
 
 		if strings.HasPrefix(msg, "/") {
 			RunCommand(msg, true, r)
@@ -410,8 +460,39 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			}
 			pendingRewind = 0
 		}
+		// run the auto compaction check and compaction in the AgentLoop, before inference hit
+		ans, err := IsAutoCompactionNeeded(sess)
+		if err != nil {
+			return logErrResult(err)
+		}
+		if ans {
+			err := compactAndReconstructSession(&reconstructedSession, sess, agentConf.NativeToolCalling, agentConf.Provider, agentConf.Model, ctx, r, &JustCompacted)
 
-		answer, err := harnessCore.AgentLoop(ctx, sess, agentConf, msg, r)
+			if err != nil {
+				log.Printf("could not auto compact session, proceeding with no compaction, err: %v", err)
+			}
+		}
+
+		// The loop calls this between two requests of the run when the context
+		// window is nearly full, then carries on with the session it returns.
+		midRunCompacted := false
+		compactMidRun := func() *harnessSession.Session {
+			err := compactAndReconstructSession(&reconstructedSession, sess, agentConf.NativeToolCalling, agentConf.Provider, agentConf.Model, ctx, r, &JustCompacted)
+
+			if err != nil {
+				log.Printf("could not auto compact session, proceeding with no compaction, err: %v", err)
+			} else {
+				log.Println("Session Compacted.")
+				midRunCompacted = true
+			}
+
+			// Always the current one: unchanged if nothing was compacted.
+			return reconstructedSession
+		}
+
+		answer, err := harnessCore.AgentLoop(ctx, reconstructedSession, sess, agentConf, msg, r, compactMidRun)
+
+		JustCompacted = midRunCompacted
 		return tui.AgentResult{Response: answer}, err
 	}
 
@@ -486,4 +567,52 @@ func resumeSession(localAgent bool) (*harnessSession.Session, []string) {
 
 func selectModel(modelSlice []string, reader *bufio.Reader) (string, error) {
 	return chooseOption(reader, "Model", plainOptions(modelSlice))
+}
+
+// logErrResult logs err and returns the empty result that ends the turn
+// without stopping the TUI. Use it as: return logErrResult(err).
+func logErrResult(err error) (tui.AgentResult, error) {
+	log.Println(err)
+	return tui.AgentResult{}, nil
+}
+
+func compactAndReconstructSession(reconstructedSession **harnessSession.Session, sess *harnessSession.Session, toolCalling bool, provider, model string, ctx context.Context, r *bufio.Reader, JustCompacted *bool) error {
+	// Every compaction (/compact, auto, mid-run) goes through here.
+	tui.NotifyCompacting(true)
+	defer tui.NotifyCompacting(false)
+
+	err := CompactSession(*reconstructedSession, sess, toolCalling, provider, model, ctx, r)
+
+	if err != nil {
+		return err
+	}
+
+	// step: 2 run Reconstruction
+	reSess, err := harnessSession.ReconstructSession(sess)
+
+	if err != nil {
+		return err
+	}
+	*reconstructedSession = reSess
+	*JustCompacted = true
+	sess.LastPromptTokens = 0
+	commitErr := harnessSession.Commit(sess)
+	if commitErr != nil {
+		return commitErr
+	}
+	return nil
+}
+func IsAutoCompactionNeeded(sess *harnessSession.Session) (bool, error) {
+	ctxLimit := sess.ContextLimit
+	currTokenCost := sess.LastPromptTokens
+
+	if ctxLimit <= 0 {
+		return false, fmt.Errorf("invalid context limit: %d", ctxLimit)
+	}
+
+	if currTokenCost >= ctxLimit-ctxLimit/4 {
+		return true, nil
+	}
+
+	return false, nil
 }

@@ -76,35 +76,44 @@ var providerHTTPClient = &http.Client{
 }
 
 // nativeToolAgentCall dispatches to the loop for the selected provider.
-func nativeToolAgentCall(ctx context.Context, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string) (string, error) {
+func NativeToolAgentCall(ctx context.Context, reSess, sess *harnessSession.Session, reader *bufio.Reader, provider string, modelName string, compact CompactFunc) (string, error) {
 	switch provider {
 	case "Ollama":
-		return ollamaToolLoop(ctx, reader, modelName, sess)
+		return ollamaToolLoop(ctx, reader, modelName, reSess, sess, compact)
 
 	case "vLLM":
-		return openAiToolLoop(ctx, reader, modelName, sess, vLLMChatURL, "")
+		return openAiToolLoop(ctx, reader, modelName, reSess, sess, vLLMChatURL, "", compact)
 
 	case "Openrouter":
 		key, err := harnessPermissions.GetAPIKey("openrouter")
 		if err != nil {
 			return "", err
 		}
-		return openAiToolLoop(ctx, reader, modelName, sess, openRouterChatURL, key)
+		return openAiToolLoop(ctx, reader, modelName, reSess, sess, openRouterChatURL, key, compact)
 
 	default:
 		return "", fmt.Errorf("unsupported provider %q", provider)
 	}
 }
 
-func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session) (string, error) {
+func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, reSess, sess *harnessSession.Session, compact CompactFunc) (string, error) {
+
 	history := &sess.Messages
+
 	effort := wireEffort("Ollama", sess.EffortSupport, sess.Effort)
 	turns := baseTurns
 	badBodies := 0
+	triedCompact := false
+	var err error
+
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
+		if sess.Compacted {
+			err = postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*&reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
 
-		err := postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
+		} else {
+			err = postJSON(ctx, ollamaChatURL, produceOllamaReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
+		}
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -114,6 +123,11 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				turns = extendTurns(turns)
 				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn+1, badBodies, maxBadBodies)
 				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
+
+				if sess.Compacted {
+					*&reSess.Messages = append(*&reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
+				}
+
 				continue
 			}
 			return "", err
@@ -130,6 +144,9 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 			// Persist the final answer too.
 			*history = append(*history, reply)
+			if sess.Compacted {
+				*&reSess.Messages = append(*&reSess.Messages, reply)
+			}
 			return reply.Content, nil
 		}
 
@@ -154,12 +171,19 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		}
 		turns = extendTurns(turns)
 		*history = append(*history, block...)
+		if sess.Compacted {
+			*&reSess.Messages = append(*&reSess.Messages, block...)
+		}
+
+		// The run goes on with another request; compact first if the last
+		// one filled most of the context window.
+		reSess = midRunCompact(sess, reSess, compact, &triedCompact)
 	}
 
 	return "", ErrMaxInferenceCalls
 }
 
-func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, sess *harnessSession.Session, chatURL string, apiKey string) (string, error) {
+func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string, reSess, sess *harnessSession.Session, chatURL string, apiKey string, compact CompactFunc) (string, error) {
 
 	history := &sess.Messages
 	// vLLM and OpenRouter share this loop; the session says which one runs.
@@ -167,9 +191,17 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 	turns := baseTurns
 	badBodies := 0
+	triedCompact := false
+	var err error
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.OpenAIChatResponse
-		err := postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
+
+		if sess.Compacted {
+			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*&reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
+		} else {
+			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
+		}
+
 		if err != nil {
 			if errors.Is(err, ErrMalformedJSON) {
 				correction, abort := handleMalformedBody(&badBodies, err)
@@ -179,6 +211,9 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				turns = extendTurns(turns)
 				log.Printf("openai turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
+				if sess.Compacted {
+					*&reSess.Messages = append(*&reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
+				}
 				continue
 			}
 			return "", err
@@ -200,6 +235,9 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			turns = extendTurns(turns)
 			log.Printf("openai turn %d: malformed tool arguments (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 			*history = append(*history, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
+			if sess.Compacted {
+				*&reSess.Messages = append(*&reSess.Messages, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
+			}
 			continue
 		}
 		// Reset only once both the body and the tool arguments decoded.
@@ -214,7 +252,9 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 			// Persist the final answer too.
 			*history = append(*history, reply)
-
+			if sess.Compacted {
+				*&reSess.Messages = append(*&reSess.Messages, reply)
+			}
 			return reply.Content, nil
 		}
 
@@ -240,6 +280,13 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 		turns = extendTurns(turns)
 		*history = append(*history, block...)
+		if sess.Compacted {
+			*&reSess.Messages = append(*&reSess.Messages, block...)
+		}
+
+		// The run goes on with another request; compact first if the last
+		// one filled most of the context window.
+		reSess = midRunCompact(sess, reSess, compact, &triedCompact)
 	}
 
 	return "", ErrMaxInferenceCalls
@@ -562,4 +609,42 @@ func errorDetail(body []byte) string {
 		return msg
 	}
 	return strings.TrimSpace(env.Error.Metadata.RemedyHint)
+}
+
+// midRunCompact compacts the session between two requests of one run when the
+// last request filled most of the context window, and returns the
+// reconstructed session to continue with.
+//
+// It is only called after a response that keeps the run going, so every
+// message gets at least one request however full the window is. It tries once
+// per run: the compaction cutoff depends on the number of user messages, which
+// a run does not change, so a second try could not compact anything more.
+func midRunCompact(sess, reSess *harnessSession.Session, compact CompactFunc, tried *bool) *harnessSession.Session {
+	if compact == nil || *tried {
+		return reSess
+	}
+
+	needed, err := isAutoCompactionNeededLooperOnly(sess)
+	if err != nil || !needed {
+		return reSess
+	}
+
+	*tried = true
+
+	return compact()
+}
+
+func isAutoCompactionNeededLooperOnly(sess *harnessSession.Session) (bool, error) {
+	ctxLimit := sess.ContextLimit
+	currTokenCost := sess.LastPromptTokens
+
+	if ctxLimit <= 0 {
+		return false, fmt.Errorf("invalid context limit: %d", ctxLimit)
+	}
+
+	if currTokenCost >= ctxLimit-ctxLimit/4 {
+		return true, nil
+	}
+
+	return false, nil
 }

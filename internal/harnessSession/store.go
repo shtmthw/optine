@@ -34,24 +34,26 @@ func defaultSessionsDir() (string, error) {
 // sessionFile is the on-disk shape. Messages holds the whole conversation in
 // provider-neutral form; the system prompt is stored at top level.
 type sessionFile struct {
-	UID               string    `json:"uid"`
-	Kind              Kind      `json:"kind"`
-	Provider          string    `json:"provider"`
-	Model             string    `json:"model"`
-	Directory         string    `json:"directory,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	ContextLimit      int       `json:"context_limit,omitempty"`
-	MaxTurns          int       `json:"max_turns,omitempty"`
-	GitStatus         bool      `json:"git_status,omitempty"`
-	LocalOnly         bool      `json:"local_only,omitempty"`
-	ToolCall          bool      `json:"tool_call,omitempty"`
-	RunCount          int       `json:"run_count"`
-	TotalUserMessages int       `json:"total_user_messages"`
-	LastPromptTokens  int       `json:"last_prompt_tokens,omitempty"`
-	Effort            Effort    `json:"effort,omitempty"`
-	SystemPrompt      string    `json:"system_prompt,omitempty"`
-	Messages          []Message `json:"messages,omitempty"`
+	UID               string     `json:"uid"`
+	Kind              Kind       `json:"kind"`
+	Provider          string     `json:"provider"`
+	Model             string     `json:"model"`
+	Directory         string     `json:"directory,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ContextLimit      int        `json:"context_limit,omitempty"`
+	MaxTurns          int        `json:"max_turns,omitempty"`
+	GitStatus         bool       `json:"git_status,omitempty"`
+	LocalOnly         bool       `json:"local_only,omitempty"`
+	ToolCall          bool       `json:"tool_call,omitempty"`
+	Compacted         bool       `json:"compacted,omitempty"`
+	Compaction        Compaction `json:"compaction,omitzero"`
+	RunCount          int        `json:"run_count"`
+	TotalUserMessages int        `json:"total_user_messages"`
+	LastPromptTokens  int        `json:"last_prompt_tokens,omitempty"`
+	Effort            Effort     `json:"effort,omitempty"`
+	SystemPrompt      string     `json:"system_prompt,omitempty"`
+	Messages          []Message  `json:"messages,omitempty"`
 }
 
 func (f sessionFile) messageLen() int {
@@ -72,6 +74,8 @@ func toFile(s *Session) sessionFile {
 		GitStatus:         s.GitStatus,
 		LocalOnly:         s.LocalOnly,
 		ToolCall:          s.ToolCall,
+		Compacted:         s.Compacted,
+		Compaction:        s.Compaction,
 		RunCount:          s.RunCount,
 		TotalUserMessages: s.TotalUserMessages,
 		LastPromptTokens:  s.LastPromptTokens,
@@ -145,6 +149,8 @@ type Meta struct {
 	GitStatus         bool
 	LocalOnly         bool
 	ToolCall          bool
+	Compacted         bool
+	Compaction        Compaction
 }
 
 func loopInternals(
@@ -186,6 +192,8 @@ func loopInternals(
 			GitStatus:         f.GitStatus,
 			LocalOnly:         f.LocalOnly,
 			ToolCall:          f.ToolCall,
+			Compacted:         f.Compacted,
+			Compaction:        f.Compaction,
 		})
 	}
 }
@@ -246,6 +254,8 @@ func Load(uid string) (*Session, error) {
 		GitStatus:         f.GitStatus,
 		LocalOnly:         f.LocalOnly,
 		ToolCall:          f.ToolCall,
+		Compacted:         f.Compacted,
+		Compaction:        f.Compaction,
 		RunCount:          f.RunCount,
 		TotalUserMessages: f.TotalUserMessages,
 		LastPromptTokens:  f.LastPromptTokens,

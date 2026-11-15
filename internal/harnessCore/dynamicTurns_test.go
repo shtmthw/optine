@@ -83,7 +83,7 @@ func TestOllamaLoopGrowsPastBaseTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	out, err := ollamaToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OllamaNative))
+	out, err := ollamaToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OllamaNative), nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestVLLMLoopGrowsPastBaseTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	out, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "", nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestOllamaEnvelopeLoopGrowsPastBaseTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	out, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
+	out, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestVLLMEnvelopeLoopGrowsPastBaseTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	out, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "vLLM", "test-model")
+	out, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "vLLM", "test-model")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestOllamaLoopStopsAtMaxTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	_, err := ollamaToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OllamaNative))
+	_, err := ollamaToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OllamaNative), nil)
 	if !errors.Is(err, ErrMaxInferenceCalls) {
 		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestVLLMLoopStopsAtMaxTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	_, err := openAiToolLoop(context.Background(), reader, "test-model", testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "")
+	_, err := openAiToolLoop(context.Background(), reader, "test-model", nil, testSession(t, harnessSession.OpenAICompatNative), vLLMChatURL, "", nil)
 	if !errors.Is(err, ErrMaxInferenceCalls) {
 		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestOllamaEnvelopeLoopStopsAtMaxTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
+	_, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Ollama", "test-model")
 	if !errors.Is(err, ErrMaxInferenceCalls) {
 		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestVLLMEnvelopeLoopStopsAtMaxTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "vLLM", "test-model")
+	_, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "vLLM", "test-model")
 	if !errors.Is(err, ErrMaxInferenceCalls) {
 		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestOpenRouterEnvelopeLoopGrowsPastBaseTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	out, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Openrouter", "test-model")
+	out, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Openrouter", "test-model")
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestOpenRouterEnvelopeLoopStopsAtMaxTurns(t *testing.T) {
 
 	reader := bufio.NewReader(strings.NewReader(""))
 
-	_, err := nonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Openrouter", "test-model")
+	_, err := NonNativeAgentCall(context.Background(), testSession(t, harnessSession.Envelope), reader, "Openrouter", "test-model")
 	if !errors.Is(err, ErrMaxInferenceCalls) {
 		t.Fatalf("want ErrMaxInferenceCalls, got: %v", err)
 	}

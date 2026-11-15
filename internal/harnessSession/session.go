@@ -64,6 +64,13 @@ type ToolCall struct {
 	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
+// Compaction describes the summary that replaced the compacted part of a
+// transcript and the last user turn it covers.
+type Compaction struct {
+	Summary     string `json:"summary"`
+	ThroughTurn int    `json:"throughTurn"`
+}
+
 // Session owns one conversation's history and system-prompt cache. Only the
 // agent run goroutine appends; display code reads through Transcript().
 type Session struct {
@@ -79,9 +86,14 @@ type Session struct {
 	MaxTurns     int
 	// GitStatus is fixed when the session is created or loaded from disk and
 	// selects the snapshot backend for the session's entire lifetime.
-	GitStatus         bool
-	LocalOnly         bool
-	ToolCall          bool
+	GitStatus bool
+	LocalOnly bool
+	ToolCall  bool
+	// Compacted is true once the saved transcript has been compacted. New
+	// sessions start false; Load restores the saved value.
+	Compacted bool
+	// Compaction holds the summary details for a compacted transcript.
+	Compaction        Compaction
 	RunCount          int
 	TotalUserMessages int
 	LastPromptTokens  int

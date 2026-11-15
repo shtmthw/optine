@@ -34,10 +34,12 @@ func TestAgentLoopKeepsGitBackendWhenGitIsUnavailable(t *testing.T) {
 
 	_, err := AgentLoop(
 		context.Background(),
+		nil,
 		sess,
 		dataTypes.AgentConfig{Provider: "Ollama", Model: "test-model", NativeToolCalling: true},
 		"hello",
 		bufio.NewReader(strings.NewReader("")),
+		nil,
 	)
 	if err == nil {
 		t.Fatal("AgentLoop should fail when the saved git backend cannot run")

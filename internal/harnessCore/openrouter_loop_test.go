@@ -60,7 +60,7 @@ func TestOpenRouterLoopToolCallRoundTrip(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	out, err := openAiToolLoop(context.Background(), reader, "test-model", sess, srv.URL, "secret")
+	out, err := openAiToolLoop(context.Background(), reader, "test-model", nil, sess, srv.URL, "secret", nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}

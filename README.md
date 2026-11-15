@@ -74,8 +74,9 @@ lines and numbered lists.
 Each conversation is a session with its own UID. The full history, in a
 provider-neutral format, is saved after every run under your user config
 directory, for example ~/.config/optine/sessions/ on Linux, along with the
-provider, model, directory and prompt token count. Sessions are written
-atomically, so quitting early cannot leave half a file behind.
+provider, model, directory and prompt token count. A compacted session also
+stores its summary and the last user turn that summary covers. Sessions are
+written atomically, so quitting early cannot leave half a file behind.
 
 Run /resume before the terminal interface starts to load the newest saved
 session for the current working directory. Inside the interface, /resume opens

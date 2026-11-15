@@ -37,6 +37,7 @@ var (
 	newSession  = Command{Name: "/new", Description: "Start a new, empty session in this directory"}
 	rewind      = Command{Name: "/rewind", Description: "Take the conversation and files back to before one of your messages"}
 	effort      = Command{Name: "/effort", Description: "Set how hard the model reasons, on models that support it"}
+	compact     = Command{Name: "/compact", Description: "Summarise the older part of the conversation to free up context"}
 	sessionQuit = Command{Name: "/quit", Aliases: []string{"/exit", "/q"}, Description: "Exit optine; ctrl+c returns to the launcher instead"}
 )
 
@@ -52,6 +53,7 @@ func For(scope Scope) []Command {
 			{Name: "/redo", Description: "Put back the changes the last /revert undid"},
 			rewind,
 			effort,
+			compact,
 			help, funfact, sessionQuit,
 		}
 
@@ -64,6 +66,7 @@ func For(scope Scope) []Command {
 			{Name: "/redo", Description: "Put back the changes the last /revert undid"},
 			rewind,
 			effort,
+			compact,
 			help, funfact, sessionQuit,
 		}
 

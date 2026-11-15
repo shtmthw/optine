@@ -148,7 +148,7 @@ func TestRunSendsTheSessionEffort(t *testing.T) {
 	sess.EffortSupport = harnessSession.NewEffortSupport([]harnessSession.Effort{harnessSession.EffortLow, harnessSession.EffortHigh}, harnessSession.EffortDefault)
 	sess.AppendUser("hi")
 
-	out, err := nonNativeAgentCall(context.Background(), sess, bufio.NewReader(strings.NewReader("")), "Ollama", "test-model")
+	out, err := NonNativeAgentCall(context.Background(), sess, bufio.NewReader(strings.NewReader("")), "Ollama", "test-model")
 	if err != nil || out != "hello" {
 		t.Fatalf("answer = %q, %v; want hello", out, err)
 	}
