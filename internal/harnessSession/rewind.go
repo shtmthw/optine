@@ -45,7 +45,9 @@ func isUserTurn(msg Message) bool {
 }
 
 // RewindTo drops turn and everything after it from the history, so the next
-// message continues from just before turn was sent.
+// message continues from just before turn was sent. Compactions that cover
+// turn summarize messages that are gone now, so they are dropped too; the
+// latest one left, if any, still matches the history.
 func (s *Session) RewindTo(turn UserTurn) {
 	if turn.Index < 0 || turn.Index > len(s.Messages) {
 		return
@@ -54,6 +56,14 @@ func (s *Session) RewindTo(turn UserTurn) {
 	clear(s.Messages[turn.Index:]) // so the backing array doesn't pin discarded data
 	s.Messages = s.Messages[:turn.Index]
 	s.TotalUserMessages = turn.Number - 1
+
+	kept := s.CompactionsKept(turn.Number)
+	clear(s.Compactions[kept:])
+	s.Compactions = s.Compactions[:kept]
+
+	// The last measured prompt was for the longer history; the next request
+	// measures the rewound one.
+	s.LastPromptTokens = 0
 }
 
 // TranscriptBefore projects the history before index, which is what the

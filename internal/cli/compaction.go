@@ -13,19 +13,24 @@ func CompactSession(reSess, sess *harnessSession.Session, toolCalling bool, prov
 	throughTurn := sess.TotalUserMessages * 80 / 100
 
 	// An already compacted session is summarised from its reconstructed view
-	// (old summary + newer turns) so the input still fits the context window.
-	// reSess counts user turns from the old cutoff onward.
+	// (latest summary + newer turns) so the input still fits the context
+	// window. reSess counts user turns from the latest cutoff onward.
 	source, turns := sess.Messages, throughTurn
-	if sess.Compacted && reSess != nil {
-		source, turns = reSess.Messages, throughTurn-sess.Compaction.ThroughTurn
-
+	if latest, ok := sess.LatestCompaction(); ok {
+		// Each compaction must cover more than the one before it, or a rewind
+		// could no longer tell which ones still match the history.
 		// MessageToCompact's own error is about a session with too few
 		// messages, which is not what happened here.
-		if turns <= 0 {
+		if throughTurn <= latest.ThroughTurn {
 			return fmt.Errorf(
-				"nothing new to compact: messages 1-%d are already compacted and the next cutoff has not moved past them yet",
-				sess.Compaction.ThroughTurn,
+				"nothing new to compact: messages 1-%d are already compacted (compaction #%d) and the next cutoff has not moved past them yet",
+				latest.ThroughTurn,
+				latest.Number,
 			)
+		}
+
+		if reSess != nil {
+			source, turns = reSess.Messages, throughTurn-latest.ThroughTurn
 		}
 	}
 
@@ -38,7 +43,7 @@ func CompactSession(reSess, sess *harnessSession.Session, toolCalling bool, prov
 	dummySession := *sess
 	// The dummy is a plain one-off conversation; it must never take the
 	// compacted branch in the tool loops.
-	dummySession.Compacted = false
+	dummySession.Compactions = nil
 	// It starts with no measured prompt, so the over-the-limit count that
 	// triggered this compaction can't be read as the summary run's own.
 	dummySession.LastPromptTokens = 0
@@ -92,9 +97,7 @@ func CompactSession(reSess, sess *harnessSession.Session, toolCalling bool, prov
 	if err != nil {
 		return err
 	}
-	sess.Compacted = true
-	sess.Compaction.Summary = result
-	sess.Compaction.ThroughTurn = throughTurn
+	sess.AddCompaction(result, throughTurn)
 
 	return nil
 }

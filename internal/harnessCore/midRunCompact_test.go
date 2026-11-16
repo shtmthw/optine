@@ -133,13 +133,12 @@ func twoTurnSession(t *testing.T, kind harnessSession.Kind) *harnessSession.Sess
 }
 
 // compactTurnOne stands in for the cli package's compaction: it leaves sess
-// the way the real one does (flag, summary, cleared prompt size) with the
+// the way the real one does (compaction #1, cleared prompt size) with the
 // first turn compacted, and returns the reconstructed session.
 func compactTurnOne(t *testing.T, sess *harnessSession.Session) *harnessSession.Session {
 	t.Helper()
 
-	sess.Compacted = true
-	sess.Compaction = harnessSession.Compaction{Summary: compactedMarker, ThroughTurn: 1}
+	sess.AddCompaction(compactedMarker, 1)
 	sess.LastPromptTokens = 0
 
 	reSess, err := harnessSession.ReconstructSession(sess)
@@ -346,7 +345,7 @@ func TestAgentLoopFollowsMidRunCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run was not saved after a mid-run compaction: %v", err)
 	}
-	if last := loaded.Messages[len(loaded.Messages)-1]; !loaded.Compacted || last.Content != harnessSession.InterruptedNotice {
-		t.Fatalf("saved session: compacted=%v last=%+v", loaded.Compacted, last)
+	if last := loaded.Messages[len(loaded.Messages)-1]; !loaded.IsCompacted() || last.Content != harnessSession.InterruptedNotice {
+		t.Fatalf("saved session: compactions=%+v last=%+v", loaded.Compactions, last)
 	}
 }

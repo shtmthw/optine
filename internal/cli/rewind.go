@@ -44,24 +44,56 @@ func openRewind(sess *harnessSession.Session, pending int) (int, tui.AgentResult
 		return pending, tui.AgentResult{}
 	}
 
-	messages := tui.TranscriptMessages(sess.TranscriptBefore(turn.Index))
-	messages = append(messages, tui.CommandMessage("/rewind",
+	lines := []string{
 		fmt.Sprintf("Rewound to before message #%d; its text is back in the prompt.", turn.Number),
 		"Files and the saved session are rewound when you send your next message.",
-	))
+	}
+	if dropped := droppedCompactions(sess, turn.Number); dropped != "" {
+		lines = append(lines, "This goes back past "+dropped+".")
+	}
+
+	messages := tui.TranscriptMessages(sess.TranscriptBefore(turn.Index))
+	messages = append(messages, tui.CommandMessage("/rewind", lines...))
 
 	return turn.Number, tui.AgentResult{Messages: messages, Input: turn.Content}
+}
+
+// droppedCompactions says which compactions a rewind to message number drops
+// and what the model continues from instead, for the /rewind notice and log.
+// It is empty when the rewind keeps them all.
+func droppedCompactions(sess *harnessSession.Session, number int) string {
+	kept := sess.CompactionsKept(number)
+	dropped := sess.Compactions[kept:]
+	if len(dropped) == 0 {
+		return ""
+	}
+
+	past := fmt.Sprintf("compaction #%d, so its summary is", dropped[0].Number)
+	if len(dropped) > 1 {
+		past = fmt.Sprintf("compactions #%d-#%d, so their summaries are", dropped[0].Number, dropped[len(dropped)-1].Number)
+	}
+
+	then := "the model sees the earlier messages in full"
+	if kept > 0 {
+		then = fmt.Sprintf("the model continues from compaction #%d", sess.Compactions[kept-1].Number)
+	}
+
+	return fmt.Sprintf("%s dropped and %s", past, then)
 }
 
 // applyRewind makes the pending rewind to message number pending real, just
 // before the next message runs, and saves the shortened history so the
 // session file matches the restored files even if that run fails early.
-func applyRewind(sess *harnessSession.Session, configDir string, pending int) error {
+// It returns the new reconstructed session (reSess) the model is sent from
+// now on, since the old one still holds the rewound messages: rebuilt from the
+// latest compaction left, or nil when no compaction is left.
+func applyRewind(sess *harnessSession.Session, configDir string, pending int) (*harnessSession.Session, error) {
 	messagesToRewind := len(sess.UserTurns()) - pending + 1
+	dropped := droppedCompactions(sess, pending)
 
 	restored, err := rewindMessages(messagesToRewind, sess, sess.Directory, configDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := harnessSession.Commit(sess); err != nil {
@@ -73,8 +105,20 @@ func applyRewind(sess *harnessSession.Session, configDir string, pending int) er
 	} else {
 		log.Printf("Rewound %d message(s); no files needed restoring.", messagesToRewind)
 	}
+	if dropped != "" {
+		log.Printf("Went back past %s.", dropped)
+	}
 
-	return nil
+	if !sess.IsCompacted() {
+		return nil, nil
+	}
+
+	reSess, err := harnessSession.ReconstructSession(sess)
+	if err != nil {
+		return nil, fmt.Errorf("rebuilding the reconstructed session: %w", err)
+	}
+
+	return reSess, nil
 }
 
 // rewindMessages removes the last messagesToRewind user messages, and

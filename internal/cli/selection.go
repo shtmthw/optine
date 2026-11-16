@@ -190,7 +190,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 	}
 
 	// compacted session reconstruction here
-	if sess.Compacted {
+	if sess.IsCompacted() {
 		//reconstruct in-memory session
 		reSess, err := harnessSession.ReconstructSession(sess)
 		if err != nil {
@@ -376,7 +376,7 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 			// Rebuild before switching, so a failed rebuild leaves the current
 			// session fully in place.
 			var nextReSess *harnessSession.Session
-			if next.Compacted {
+			if next.IsCompacted() {
 				reSess, err := harnessSession.ReconstructSession(next)
 				if err != nil {
 					log.Printf("cannot resume session %s: %v", next.UID, err)
@@ -455,10 +455,15 @@ func RunAgentSession(providerName string, modelName string, nativeToolCalling bo
 		}
 
 		if pendingRewind > 0 {
-			if err := applyRewind(sess, configDir, pendingRewind); err != nil {
+			reSess, err := applyRewind(sess, configDir, pendingRewind)
+			if err != nil {
 				return tui.AgentResult{}, fmt.Errorf("rewind failed, so the message was not sent; send it again to retry, or /resume to drop the rewind: %w", err)
 			}
 			pendingRewind = 0
+			// The old reconstructed session still holds the rewound messages.
+			reconstructedSession = reSess
+			// What the rewind left has not just been compacted.
+			JustCompacted = false
 		}
 		// run the auto compaction check and compaction in the AgentLoop, before inference hit
 		ans, err := IsAutoCompactionNeeded(sess)

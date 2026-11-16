@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mattthew/optine/internal/harnessSession"
@@ -260,8 +261,12 @@ func TestApplyRewindSavesShortenedHistory(t *testing.T) {
 	f.run("two", func() { f.write("a.txt", "a2\n") })
 	f.sess.RunCount = 2 // Commit skips sessions that never ran
 
-	if err := applyRewind(f.sess, f.configDir, 2); err != nil {
+	reSess, err := applyRewind(f.sess, f.configDir, 2)
+	if err != nil {
 		t.Fatalf("applyRewind: %v", err)
+	}
+	if reSess != nil {
+		t.Fatalf("an uncompacted session got a reconstructed session: %+v", reSess.Messages)
 	}
 
 	if f.read("a.txt") != "a1\n" {
@@ -278,5 +283,94 @@ func TestApplyRewindSavesShortenedHistory(t *testing.T) {
 	}
 	if !slices.Equal(contents, []string{"one"}) || saved.TotalUserMessages != 1 {
 		t.Fatalf("saved messages = %v (count %d), want [one] and 1", contents, saved.TotalUserMessages)
+	}
+}
+
+// compactedFixture is four runs with compaction #1 covering message 1 and
+// compaction #2 covering messages 1-3.
+func compactedFixture(t *testing.T) *rewindFixture {
+	t.Helper()
+
+	f := newRewindFixture(t, false)
+	f.write("a.txt", "a0\n")
+	for i, message := range []string{"one", "two", "three", "four"} {
+		f.run(message, func() { f.write("a.txt", fmt.Sprintf("a%d\n", i+1)) })
+	}
+	f.sess.RunCount = 4 // Commit skips sessions that never ran
+	f.sess.AddCompaction("summary of 1", 1)
+	f.sess.AddCompaction("summary of 1-3", 3)
+
+	return f
+}
+
+// The /rewind notice says which compactions the pick goes back past and what
+// the model continues from, and says nothing when it keeps them all.
+func TestOpenRewindNamesDroppedCompactions(t *testing.T) {
+	cases := map[int]string{
+		4: "",
+		3: "This goes back past compaction #2, so its summary is dropped and the model continues from compaction #1.",
+		1: "This goes back past compactions #1-#2, so their summaries are dropped and the model sees the earlier messages in full.",
+	}
+
+	for pick, want := range cases {
+		f := compactedFixture(t)
+		stubPickRewind(t, pick)
+
+		_, result := openRewind(f.sess, 0)
+		notice := result.Messages[len(result.Messages)-1].Content
+		if want == "" {
+			if strings.Contains(notice, "compaction") {
+				t.Fatalf("pick %d: notice mentions a compaction it keeps: %q", pick, notice)
+			}
+			continue
+		}
+		if !strings.HasSuffix(notice, "\n"+want) {
+			t.Fatalf("pick %d: notice = %q, want it to end with %q", pick, notice, want)
+		}
+		if len(f.sess.Compactions) != 2 {
+			t.Fatal("openRewind dropped compactions before the next message")
+		}
+	}
+}
+
+// Applying a rewind past the latest compaction drops it, saves the shorter
+// list, and returns a reconstructed session rebuilt from the compaction left, so the next run
+// is not sent the rewound messages.
+func TestApplyRewindRebuildsTheReconstructedSession(t *testing.T) {
+	freshAuth(t)
+
+	f := compactedFixture(t)
+
+	reSess, err := applyRewind(f.sess, f.configDir, 3)
+	if err != nil {
+		t.Fatalf("applyRewind: %v", err)
+	}
+
+	var got []string
+	for _, msg := range reSess.Messages {
+		got = append(got, msg.Content)
+	}
+	if want := []string{"summary of 1", "two", "done: two"}; !slices.Equal(got, want) {
+		t.Fatalf("reSess = %q, want %q", got, want)
+	}
+
+	saved, err := harnessSession.Load(f.sess.UID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if want := []harnessSession.Compaction{{Number: 1, Summary: "summary of 1", ThroughTurn: 1}}; !slices.Equal(saved.Compactions, want) {
+		t.Fatalf("saved compactions = %+v, want %+v", saved.Compactions, want)
+	}
+	if f.read("a.txt") != "a2\n" {
+		t.Fatalf("a.txt = %q, want the state before message 3", f.read("a.txt"))
+	}
+
+	// Going back past the last compaction leaves no reconstructed session.
+	reSess, err = applyRewind(f.sess, f.configDir, 1)
+	if err != nil {
+		t.Fatalf("second applyRewind: %v", err)
+	}
+	if reSess != nil || f.sess.IsCompacted() {
+		t.Fatalf("rewinding past every compaction left reSess=%v compactions=%+v", reSess, f.sess.Compactions)
 	}
 }

@@ -64,9 +64,13 @@ type ToolCall struct {
 	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
-// Compaction describes the summary that replaced the compacted part of a
-// transcript and the last user turn it covers.
+// Compaction is one summary that replaced the start of the transcript for the
+// model, and the last user turn it covers. Each one summarizes everything up
+// to ThroughTurn (the previous summary plus the turns after it), so it stands
+// on its own.
 type Compaction struct {
+	// Number counts the session's compactions from 1, oldest first.
+	Number      int    `json:"number"`
 	Summary     string `json:"summary"`
 	ThroughTurn int    `json:"throughTurn"`
 }
@@ -89,11 +93,10 @@ type Session struct {
 	GitStatus bool
 	LocalOnly bool
 	ToolCall  bool
-	// Compacted is true once the saved transcript has been compacted. New
-	// sessions start false; Load restores the saved value.
-	Compacted bool
-	// Compaction holds the summary details for a compacted transcript.
-	Compaction        Compaction
+	// Compactions lists the session's compactions, oldest first, numbered
+	// from 1. The model sees the latest one; the earlier ones stay so a rewind
+	// past the latest can fall back to them. Empty means not compacted.
+	Compactions       []Compaction
 	RunCount          int
 	TotalUserMessages int
 	LastPromptTokens  int

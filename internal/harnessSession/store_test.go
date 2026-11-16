@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -40,8 +41,8 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		Message{Role: "assistant", Content: "done"},
 	)
 	sess.RecordPromptTokens(42)
-	sess.Compacted = true
-	sess.Compaction = Compaction{Summary: "The agent is implementing...", ThroughTurn: 40}
+	sess.AddCompaction("The agent started...", 20)
+	sess.AddCompaction("The agent is implementing...", 40)
 
 	if err := Commit(sess); err != nil {
 		t.Fatalf("commit: %v", err)
@@ -58,13 +59,19 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 		t.Fatalf("session file missing tool_call: %s", raw)
 	}
 	for _, want := range []string{
-		`"compacted": true`,
-		`"compaction":`,
+		`"compactions":`,
+		`"number": 2`,
 		`"summary": "The agent is implementing..."`,
 		`"throughTurn": 40`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("session file missing %s: %s", want, raw)
+		}
+	}
+	// The single-summary keys are only read, for files saved before the list.
+	for _, legacy := range []string{`"compacted"`, `"compaction"`} {
+		if strings.Contains(string(raw), legacy) {
+			t.Fatalf("session file wrote legacy key %s: %s", legacy, raw)
 		}
 	}
 	if !strings.Contains(string(raw), `"messages":`) {
@@ -90,8 +97,8 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	if !metas[0].ToolCall {
 		t.Fatal("tool call lost in listing")
 	}
-	if !metas[0].Compacted || metas[0].Compaction.ThroughTurn != 40 {
-		t.Fatalf("compaction metadata lost in listing: %+v", metas[0])
+	if !slices.Equal(metas[0].Compactions, sess.Compactions) {
+		t.Fatalf("compactions lost in listing: %+v", metas[0].Compactions)
 	}
 	if metas[0].TotalUserMessages != 1 {
 		t.Fatalf("user message count lost in listing: %d", metas[0].TotalUserMessages)
@@ -111,8 +118,12 @@ func TestCommitLoadRoundTrip(t *testing.T) {
 	if !loaded.ToolCall {
 		t.Fatal("tool call lost on load")
 	}
-	if !loaded.Compacted || loaded.Compaction.Summary != "The agent is implementing..." || loaded.Compaction.ThroughTurn != 40 {
-		t.Fatalf("compaction metadata lost on load: %+v", loaded.Compaction)
+	wantCompactions := []Compaction{
+		{Number: 1, Summary: "The agent started...", ThroughTurn: 20},
+		{Number: 2, Summary: "The agent is implementing...", ThroughTurn: 40},
+	}
+	if !slices.Equal(loaded.Compactions, wantCompactions) {
+		t.Fatalf("compactions lost on load: %+v", loaded.Compactions)
 	}
 	if loaded.TotalUserMessages != 1 {
 		t.Fatalf("user message count lost on load: %d", loaded.TotalUserMessages)
@@ -174,8 +185,8 @@ func TestCompactionMetadataDefaultsToEmpty(t *testing.T) {
 	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
 
 	sess := New(Config{Provider: "Ollama", Model: "m", Kind: OllamaNative})
-	if sess.Compacted || sess.Compaction != (Compaction{}) {
-		t.Fatalf("new session is already compacted: compacted=%v compaction=%+v", sess.Compacted, sess.Compaction)
+	if sess.IsCompacted() {
+		t.Fatalf("new session is already compacted: %+v", sess.Compactions)
 	}
 
 	sess.BeginRun()
@@ -188,7 +199,7 @@ func TestCompactionMetadataDefaultsToEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read session file: %v", err)
 	}
-	if strings.Contains(string(raw), `"compacted"`) || strings.Contains(string(raw), `"compaction"`) {
+	if strings.Contains(string(raw), `"compact`) {
 		t.Fatalf("uncompacted session wrote compaction keys: %s", raw)
 	}
 
@@ -214,8 +225,70 @@ func TestCompactionMetadataDefaultsToEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.Compacted || loaded.Compaction != (Compaction{}) {
-		t.Fatalf("legacy session did not default to empty compaction: compacted=%v compaction=%+v", loaded.Compacted, loaded.Compaction)
+	if loaded.IsCompacted() {
+		t.Fatalf("legacy session did not default to no compactions: %+v", loaded.Compactions)
+	}
+}
+
+// A file saved with a single compaction summary, before the numbered list,
+// loads as compaction #1 and is saved back in the list form.
+func TestSingleSummaryFileLoadsAsCompactionOne(t *testing.T) {
+	dir := stubSessionsDir(t)
+
+	memory := ""
+	crawlers := []string{"searxng"}
+	stubSystemInputs(t, "/tmp/memory.md", &memory, &crawlers)
+
+	old := `{
+		"uid": "single",
+		"kind": "ollama-native",
+		"provider": "Ollama",
+		"model": "m",
+		"run_count": 2,
+		"total_user_messages": 2,
+		"compacted": true,
+		"compaction": {"summary": "first turn summary", "throughTurn": 1},
+		"messages": [
+			{"role": "user", "content": "one"},
+			{"role": "assistant", "content": "done one"},
+			{"role": "user", "content": "two"},
+			{"role": "assistant", "content": "done two"}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "single.json"), []byte(old), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	want := []Compaction{{Number: 1, Summary: "first turn summary", ThroughTurn: 1}}
+
+	metas, err := List("", false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(metas) != 1 || !slices.Equal(metas[0].Compactions, want) {
+		t.Fatalf("listing = %+v, want compaction #1", metas)
+	}
+
+	loaded, err := Load("single")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !slices.Equal(loaded.Compactions, want) {
+		t.Fatalf("compactions = %+v, want %+v", loaded.Compactions, want)
+	}
+	if _, err := ReconstructSession(loaded); err != nil {
+		t.Fatalf("the loaded session cannot be reconstructed: %v", err)
+	}
+
+	if err := Commit(loaded); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "single.json"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(raw), `"compactions":`) || strings.Contains(string(raw), `"compaction":`) {
+		t.Fatalf("resaved file is not in the list form: %s", raw)
 	}
 }
 

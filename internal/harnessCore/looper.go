@@ -62,7 +62,7 @@ func AgentLoop(ctx context.Context, reSess, sess *harnessSession.Session, agentC
 
 	sess.AppendUser(userMessage)
 
-	if sess.Compacted {
+	if sess.IsCompacted() {
 		reSess.AppendUser(userMessage)
 	}
 
@@ -94,7 +94,7 @@ func AgentLoop(ctx context.Context, reSess, sess *harnessSession.Session, agentC
 		// History already holds every completed turn (tool blocks are appended whole, with a result for every call).
 		// Mark the cut so the model knows on the next message that this run did not finish.
 		sess.AppendInterrupted()
-		if sess.Compacted {
+		if sess.IsCompacted() {
 			reSess.AppendInterrupted()
 		}
 	}

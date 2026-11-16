@@ -34,20 +34,23 @@ func defaultSessionsDir() (string, error) {
 // sessionFile is the on-disk shape. Messages holds the whole conversation in
 // provider-neutral form; the system prompt is stored at top level.
 type sessionFile struct {
-	UID               string     `json:"uid"`
-	Kind              Kind       `json:"kind"`
-	Provider          string     `json:"provider"`
-	Model             string     `json:"model"`
-	Directory         string     `json:"directory,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	ContextLimit      int        `json:"context_limit,omitempty"`
-	MaxTurns          int        `json:"max_turns,omitempty"`
-	GitStatus         bool       `json:"git_status,omitempty"`
-	LocalOnly         bool       `json:"local_only,omitempty"`
-	ToolCall          bool       `json:"tool_call,omitempty"`
-	Compacted         bool       `json:"compacted,omitempty"`
-	Compaction        Compaction `json:"compaction,omitzero"`
+	UID          string       `json:"uid"`
+	Kind         Kind         `json:"kind"`
+	Provider     string       `json:"provider"`
+	Model        string       `json:"model"`
+	Directory    string       `json:"directory,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	ContextLimit int          `json:"context_limit,omitempty"`
+	MaxTurns     int          `json:"max_turns,omitempty"`
+	GitStatus    bool         `json:"git_status,omitempty"`
+	LocalOnly    bool         `json:"local_only,omitempty"`
+	ToolCall     bool         `json:"tool_call,omitempty"`
+	Compactions  []Compaction `json:"compactions,omitempty"`
+	// LegacyCompacted and LegacyCompaction are how files saved before
+	// Compactions held their one summary. They are read, never written.
+	LegacyCompacted   bool       `json:"compacted,omitempty"`
+	LegacyCompaction  Compaction `json:"compaction,omitzero"`
 	RunCount          int        `json:"run_count"`
 	TotalUserMessages int        `json:"total_user_messages"`
 	LastPromptTokens  int        `json:"last_prompt_tokens,omitempty"`
@@ -58,6 +61,19 @@ type sessionFile struct {
 
 func (f sessionFile) messageLen() int {
 	return len(f.Messages)
+}
+
+// compactions returns the file's compactions, reading a file saved with a
+// single summary as compaction #1.
+func (f sessionFile) compactions() []Compaction {
+	if len(f.Compactions) > 0 || f.LegacyCompaction.Summary == "" {
+		return f.Compactions
+	}
+
+	legacy := f.LegacyCompaction
+	legacy.Number = 1
+
+	return []Compaction{legacy}
 }
 
 func toFile(s *Session) sessionFile {
@@ -74,8 +90,7 @@ func toFile(s *Session) sessionFile {
 		GitStatus:         s.GitStatus,
 		LocalOnly:         s.LocalOnly,
 		ToolCall:          s.ToolCall,
-		Compacted:         s.Compacted,
-		Compaction:        s.Compaction,
+		Compactions:       s.Compactions,
 		RunCount:          s.RunCount,
 		TotalUserMessages: s.TotalUserMessages,
 		LastPromptTokens:  s.LastPromptTokens,
@@ -149,8 +164,7 @@ type Meta struct {
 	GitStatus         bool
 	LocalOnly         bool
 	ToolCall          bool
-	Compacted         bool
-	Compaction        Compaction
+	Compactions       []Compaction
 }
 
 func loopInternals(
@@ -192,8 +206,7 @@ func loopInternals(
 			GitStatus:         f.GitStatus,
 			LocalOnly:         f.LocalOnly,
 			ToolCall:          f.ToolCall,
-			Compacted:         f.Compacted,
-			Compaction:        f.Compaction,
+			Compactions:       f.compactions(),
 		})
 	}
 }
@@ -254,8 +267,7 @@ func Load(uid string) (*Session, error) {
 		GitStatus:         f.GitStatus,
 		LocalOnly:         f.LocalOnly,
 		ToolCall:          f.ToolCall,
-		Compacted:         f.Compacted,
-		Compaction:        f.Compaction,
+		Compactions:       f.compactions(),
 		RunCount:          f.RunCount,
 		TotalUserMessages: f.TotalUserMessages,
 		LastPromptTokens:  f.LastPromptTokens,

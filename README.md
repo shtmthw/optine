@@ -75,8 +75,10 @@ Each conversation is a session with its own UID. The full history, in a
 provider-neutral format, is saved after every run under your user config
 directory, for example ~/.config/optine/sessions/ on Linux, along with the
 provider, model, directory and prompt token count. A compacted session also
-stores its summary and the last user turn that summary covers. Sessions are
-written atomically, so quitting early cannot leave half a file behind.
+stores each of its compactions, numbered from 1 with the oldest first, as a
+summary and the last user turn it covers; the model is sent the latest one.
+Sessions are written atomically, so quitting early cannot leave half a file
+behind.
 
 Run /resume before the terminal interface starts to load the newest saved
 session for the current working directory. Inside the interface, /resume opens
@@ -127,6 +129,11 @@ every run from the picked message on is undone, newest first, the history is
 cut there and saved, and your message runs on the rewound conversation.
 Leaving or switching sessions before that discards the rewind. A run without a
 complete snapshot pair is reported and its files are left as they are.
+
+A compaction that covers the picked message summarizes messages the rewind
+removes, so it is dropped along with any later ones. The model then continues
+from the newest compaction left, or from the full earlier messages if none is
+left, and the /rewind notice says which.
 
 ## Effort
 

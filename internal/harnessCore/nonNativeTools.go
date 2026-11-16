@@ -227,7 +227,7 @@ func nonNativeAgentCall(ctx context.Context, reSess, sess *harnessSession.Sessio
 
 	// A compacted session without its reconstructed view falls back to the
 	// full history instead of dereferencing nil.
-	compacted := sess.Compacted && reSess != nil
+	compacted := sess.IsCompacted() && reSess != nil
 
 	// mirror copies the last n messages just added to history into reSess.
 	mirror := func(n int) {
@@ -318,7 +318,7 @@ func nonNativeAgentCall(ctx context.Context, reSess, sess *harnessSession.Sessio
 			// last one filled most of the context window. A first compaction
 			// turns the reconstructed view on from here.
 			reSess = midRunCompact(sess, reSess, compact, &triedCompact)
-			compacted = sess.Compacted && reSess != nil
+			compacted = sess.IsCompacted() && reSess != nil
 
 		default:
 			return "", fmt.Errorf(

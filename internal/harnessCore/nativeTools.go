@@ -108,7 +108,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.NativeToolChatResponse
-		if sess.Compacted {
+		if sess.IsCompacted() {
 			err = postJSON(ctx, ollamaChatURL, produceOllamaReqBody(reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
 
 		} else {
@@ -124,7 +124,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				log.Printf("ollama turn %d: malformed body (%d/%d), asking model to re-issue", turn+1, badBodies, maxBadBodies)
 				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
 
-				if sess.Compacted {
+				if sess.IsCompacted() {
 					reSess.Messages = append(reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
 				}
 
@@ -144,7 +144,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 			// Persist the final answer too.
 			*history = append(*history, reply)
-			if sess.Compacted {
+			if sess.IsCompacted() {
 				reSess.Messages = append(reSess.Messages, reply)
 			}
 			return reply.Content, nil
@@ -171,7 +171,7 @@ func ollamaToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 		}
 		turns = extendTurns(turns)
 		*history = append(*history, block...)
-		if sess.Compacted {
+		if sess.IsCompacted() {
 			reSess.Messages = append(reSess.Messages, block...)
 		}
 
@@ -196,7 +196,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 	for turn := 0; turn < turns; turn++ {
 		var response dataTypes.OpenAIChatResponse
 
-		if sess.Compacted {
+		if sess.IsCompacted() {
 			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(reSess.Messages, modelName, sess.SystemPrompt, effort), &response)
 		} else {
 			err = postJSONAuthorized(ctx, chatURL, apiKey, produceOpenAIReqBody(*history, modelName, sess.SystemPrompt, effort), &response)
@@ -211,7 +211,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 				turns = extendTurns(turns)
 				log.Printf("openai turn %d: malformed body (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 				*history = append(*history, harnessSession.Message{Role: "user", Content: correction})
-				if sess.Compacted {
+				if sess.IsCompacted() {
 					reSess.Messages = append(reSess.Messages, harnessSession.Message{Role: "user", Content: correction})
 				}
 				continue
@@ -235,7 +235,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 			turns = extendTurns(turns)
 			log.Printf("openai turn %d: malformed tool arguments (%d/%d), asking model to re-issue", turn, badBodies, maxBadBodies)
 			*history = append(*history, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
-			if sess.Compacted {
+			if sess.IsCompacted() {
 				reSess.Messages = append(reSess.Messages, harnessSession.Message{Role: "user", Content: correctionForBadToolArguments(err)})
 			}
 			continue
@@ -252,7 +252,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 			// Persist the final answer too.
 			*history = append(*history, reply)
-			if sess.Compacted {
+			if sess.IsCompacted() {
 				reSess.Messages = append(reSess.Messages, reply)
 			}
 			return reply.Content, nil
@@ -280,7 +280,7 @@ func openAiToolLoop(ctx context.Context, reader *bufio.Reader, modelName string,
 
 		turns = extendTurns(turns)
 		*history = append(*history, block...)
-		if sess.Compacted {
+		if sess.IsCompacted() {
 			reSess.Messages = append(reSess.Messages, block...)
 		}
 
